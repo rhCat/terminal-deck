@@ -207,7 +207,11 @@ function openMain(ws, token, session, cols, rows) {
   const old = mains.get(token);
   if (old) {
     mains.delete(token);
-    try { old.pty._suppressBye = true; old.pty.kill(); } catch {}
+    // Mute + suppress BEFORE killing: the old pty may still stream a few
+    // frames while it dies — without this, the browser sees two streams on the
+    // same token (ghost/doubled chars) and the old pty's onExit would delete
+    // the NEW pty from mains (input silently dropped = lag / queue buildup).
+    try { old.pty._suppressBye = true; old.pty._suppressData = true; old.pty.kill(); } catch {}
   }
   // Pre-flight: node-pty's generic "posix_spawnp failed" hides the real cause.
   // Give a precise error if tmux is missing or not executable.
@@ -246,11 +250,20 @@ function openMain(ws, token, session, cols, rows) {
     }
     return;
   }
-  p.onData((data) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'data', token, data })); });
+  p.onData((data) => {
+    // A replaced pty may emit a few trailing frames while it dies; never
+    // forward them (they'd double-render on the same token).
+    if (p._suppressData) return;
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'data', token, data }));
+  });
   p.onExit(({ exitCode, signal }) => {
     console.error(`[td] ${new Date().toISOString().slice(11,19)} pty exit token=${token} session=${session} code=${exitCode} sig=${signal} suppress=${!!p._suppressBye}`);
     if (!p._suppressBye && ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'bye', token }));
-    mains.delete(token);
+    // Only delete this token if it still points at THIS pty. If the pty was
+    // replaced (respawned), the entry now holds the NEW pty — deleting it
+    // would silently drop all subsequent input (lag / queue buildup).
+    const cur = mains.get(token);
+    if (cur && cur.pty === p) mains.delete(token);
   });
   mains.set(token, { pty: p, session });
   if (!socketTokens.has(ws)) socketTokens.set(ws, new Set());
