@@ -1,0 +1,155 @@
+// terminal-deck — PowerPoint-style live thumbnail terminal manager on persistent tmux
+//
+// Model: each "work" = one persistent tmux SESSION. 6-7 works = 6-7 sessions =
+// 6-7 cards in the deck. This is exactly your requirement: work persists because
+// the tmux server holds the sessions detached; closing the browser, reloading,
+// or even restarting this node server doesn't kill them.
+//
+//  * Thumbnails (the "slide sorter"): cheap `tmux capture-pane` snapshots, polled
+//    every ~1s. Non-interactive, but live enough to peek at what's flowing.
+//  * Main slide (the focused work): a real interactive node-pty running
+//    `tmux attach -t <session>` — full keyboard, resize, everything.
+//  * Zoom: point the main pty at a different session => that card becomes the
+//    big screen. Grid view: show all cards at once as live snapshots.
+//
+// Persistence rationale for node-pty: the pty is only a thin *client* to tmux.
+// If it dies, tmux keeps the session; we just spawn a fresh `tmux attach` on the
+// next interaction. The work itself lives in the tmux server, not in the pty.
+
+import express from 'express';
+import { WebSocketServer } from 'ws';
+import * as pty from 'node-pty';
+import { spawn } from 'child_process';
+import { mkdirSync } from 'fs';
+import os from 'os';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// ---- tmux environment (rootless install on this box) ------------------------
+const TMUX_BIN = process.env.TMUX_BIN || 'tmux';
+const TMUX_LIB_DIR = process.env.TMUX_LIB_DIR || null;
+const TMUX_SOCK_DIR = process.env.TMUX_SOCK_DIR || path.join(os.tmpdir(), 'terminal-deck');
+mkdirSync(TMUX_SOCK_DIR, { recursive: true });
+
+function tmuxEnv(extra) {
+  const e = { ...process.env, TMUX_TMPDIR: TMUX_SOCK_DIR, ...extra };
+  if (TMUX_LIB_DIR) e.LD_LIBRARY_PATH = [TMUX_LIB_DIR, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':');
+  return e;
+}
+
+// ---- persistent tmux server -------------------------------------------------
+function ensureServer() {
+  try { spawn(TMUX_BIN, ['-L', 'deck', 'start-server'], { env: tmuxEnv(), stdio: 'ignore' }); } catch (e) {
+    console.error('tmux start-server failed:', e.message);
+  }
+}
+ensureServer();
+
+function tmux(args, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(TMUX_BIN, ['-L', 'deck', ...args], { env: tmuxEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = ''; let err = '';
+    p.stdout.on('data', (d) => (out += d));
+    p.stderr.on('data', (d) => (err += d));
+    p.on('error', reject);
+    p.on('close', (code) => (code === 0 ? resolve(out) : reject(new Error(err.trim() || `tmux exit ${code}`))));
+  });
+}
+
+async function listSessions() {
+  const out = await tmux(['list-sessions', '-F', '#{session_name}']).catch(() => '');
+  return out.split('\n').filter(Boolean).map((name) => ({ name }));
+}
+
+async function snapshot(session, cols = 80, rows = 24) {
+  // raw snapshot with no status line; strip tmux screen-control preamble that
+  // capture-pane -p can prepend in control-ish contexts (rare)
+  const out = await tmux(['capture-pane', '-t', session, '-p', '-J', '-e']).catch(() => '');
+  // tn: -e keeps escape sequences so ANSI color/format passes through to xterm
+  return out;
+}
+
+// ---- HTTP --------------------------------------------------------------------
+const app = express();
+app.use(express.static(path.join(__dirname, 'public')));
+
+app.get('/api/sessions', async (_req, res) => {
+  try { res.json({ ok: true, sessions: await listSessions() }); }
+  catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/session', async (req, res) => {
+  const name = String((req.body && req.body.name) || 'work').replace(/[^A-Za-z0-9._-]/g, '_');
+  try { await tmux(['new-session', '-d', '-s', name, '-x', '132', '-y', '43']); }
+  catch { /* exists */ }
+  res.json({ ok: true, name });
+});
+
+app.post('/api/kill', async (req, res) => {
+  const name = String((req.body && req.body.name) || '').replace(/[^A-Za-z0-9._-]/g, '_');
+  try { await tmux(['kill-session', '-t', name]); res.json({ ok: true }); }
+  catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+
+// ---- WebSocket ----------------------------------------------------------------
+const wss = new WebSocketServer({ noServer: true });
+
+// token -> {pty}  main interactive terminals
+const mains = new Map();
+
+// sockets -> Set<token> so we can reap when a browser disconnects
+const socketTokens = new Map();
+
+function openMain(ws, token, session, cols, rows) {
+  // If we already have this token, just return (idempotent).
+  if (mains.has(token)) return;
+  const p = pty.spawn(TMUX_BIN, ['-L', 'deck', 'attach', '-t', session], {
+    name: 'xterm-256color', cols: cols || 132, rows: rows || 43, cwd: os.homedir(),
+    env: tmuxEnv({ TERM: 'xterm-256color' }),
+  });
+  p.onData((data) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'data', token, data })); });
+  p.onExit(() => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'bye', token })); mains.delete(token); });
+  mains.set(token, { pty: p, session });
+  if (!socketTokens.has(ws)) socketTokens.set(ws, new Set());
+  socketTokens.get(ws).add(token);
+}
+
+wss.on('connection', (ws) => {
+  ws.on('message', async (raw) => {
+    let msg; try { msg = JSON.parse(raw); } catch { return; }
+    if (msg.t === 'main') {
+      openMain(ws, msg.token, msg.session, msg.cols, msg.rows);
+    } else if (msg.t === 'input') {
+      const m = mains.get(msg.token);
+      if (m) m.pty.write(msg.data);
+    } else if (msg.t === 'resize') {
+      const m = mains.get(msg.token);
+      if (m) m.pty.resize(Math.floor(msg.cols), Math.floor(msg.rows));
+    } else if (msg.t === 'unfollow') {
+      const m = mains.get(msg.token);
+      if (m) { try { m.pty.kill(); } catch {} mains.delete(msg.token); }
+    } else if (msg.t === 'snapshot') {
+      // live thumbnail refresh
+      const snap = await snapshot(msg.session);
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'snap', session: msg.session, data: snap }));
+    }
+  });
+  ws.on('close', () => {
+    const toks = socketTokens.get(ws);
+    if (toks) for (const t of toks) { const m = mains.get(t); if (m) { try { m.pty.kill(); } catch {} mains.delete(t); } }
+    socketTokens.delete(ws);
+  });
+});
+
+export function attachTo(server) {
+  server.on('upgrade', (req, socket, head) => {
+    const u = new URL(req.url, 'http://localhost');
+    if (u.pathname === '/ws') wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+    else socket.destroy();
+  });
+}
+
+const PORT = process.env.PORT || 8787;
+export { app, listSessions, tmux, TMUX_BIN, TMUX_SOCK_DIR };

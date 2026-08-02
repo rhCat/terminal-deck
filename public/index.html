@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>terminal-deck — work deck</title>
+<link rel="stylesheet" href="/xterm.css">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<!-- ============ TOP TOOLBAR ============ -->
+<header id="toolbar">
+  <div class="brand">
+    <span class="logo">▦</span>
+    <span class="title">terminal-deck</span>
+    <span class="persist-badge">tmux · persistent</span>
+  </div>
+  <div class="toolbar-actions">
+    <button id="btn-new" title="New session (new slide)">＋ New work</button>
+    <span class="divider"></span>
+    <button id="btn-grid" class="active" title="Grid / thumbnails view">⊞ Grid</button>
+    <button id="btn-zoom" title="Zoom focused work to full screen">⛶ Zoom</button>
+    <button id="btn-close" title="Kill the focused session">✕ Kill</button>
+  </div>
+</header>
+
+<!-- ============ LEFT: SLIDE-SORTER THUMBNAILS ============ -->
+<nav id="sorter">
+  <div class="sorter-label">Works / slides</div>
+  <div id="cards" class="card-list"></div>
+</nav>
+
+<!-- ============ CENTER: MAIN SLIDE ============ -->
+<main id="stage">
+  <div id="stage-head">
+    <span id="stage-title">—</span>
+    <span id="stage-meta" class="muted"></span>
+  </div>
+  <div id="term"></div>
+  <div id="stage-empty" class="hidden">
+    <p>No work focused. Click a card on the left, or create a new work above.</p>
+  </div>
+</main>
+
+<!-- ============ BOTTOM: NOTES ============ -->
+<footer id="notes">
+  <div class="notes-label">Notes</div>
+  <textarea id="notes-text" placeholder="Write notes for this work (per-slide speaker notes)..."></textarea>
+</footer>
+
+<!-- modal -->
+<div id="modal" class="hidden">
+  <div class="modal-box">
+    <h3>New work</h3>
+    <input id="new-name" placeholder="work-name" autofocus>
+    <div class="modal-actions">
+      <button id="modal-cancel">Cancel</button>
+      <button id="modal-ok" class="primary">Create</button>
+    </div>
+  </div>
+</div>
+
+<script src="/xterm.js"></script>
+<script src="/addon-fit.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
