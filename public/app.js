@@ -196,7 +196,31 @@ $themeSelect.addEventListener('change', () => {
   applyThemeCss(state.theme);
 });
 function applyThemeCss(theme) {
-  document.body.style.background = (THEMES[theme] || THEMES.dark).background;
+  const t = THEMES[theme] || THEMES.dark;
+  document.body.style.background = t.background;
+  // Drive the app chrome + scrollbars from the theme palette so panels,
+  // borders and scrollbars follow the selected theme (not just the terminal).
+  const root = document.documentElement.style;
+  // derive a panel/border palette from the theme background (simple shade)
+  const bg = t.background;
+  root.setProperty('--bg', bg);
+  root.setProperty('--panel', shade(bg, 1.06));
+  root.setProperty('--panel-2', shade(bg, 1.12));
+  root.setProperty('--border', shade(bg, 1.28));
+  root.setProperty('--text', t.foreground);
+  root.setProperty('--muted', t.brightBlack || '#7b8494');
+  root.setProperty('--accent', t.brightBlue || t.blue || '#4f8cff');
+  root.setProperty('--accent-2', t.green || '#6ee7b7');
+}
+// blend a hex color toward white/black by a factor (1 = unchanged, >1 lighter)
+function shade(hex, f) {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  const r = Math.min(255, Math.round(((n >> 16) & 255) * f));
+  const g = Math.min(255, Math.round(((n >> 8) & 255) * f));
+  const b = Math.min(255, Math.round((n & 255) * f));
+  return '#' + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
 }
 
 // ---------- clipboard popover ----------
@@ -252,12 +276,19 @@ async function refreshSessions() {
   for (const s of j.sessions) {
     if (!cardsEl.has(s.name)) addCard(s.name);
   }
+  // re-apply the user's saved thumbnail order (new sessions go last)
+  const order = loadCardOrder(names);
+  for (let i = order.length - 1; i >= 0; i--) {
+    const c = cardsEl.get(order[i]);
+    if (c) $cards.insertBefore(c.el, $cards.firstChild);
+  }
 }
 
 function addCard(name) {
   const el = document.createElement('div');
   el.className = 'card';
   el.dataset.name = name;
+  el.draggable = true;
   el.innerHTML = `
     <div class="card-head"><span class="card-name"></span>
       <span class="card-controls"><span class="dot live"></span>
@@ -277,11 +308,58 @@ function addCard(name) {
     collapseBtn.textContent = collapsed ? '▸' : '▾';
     collapseBtn.title = collapsed ? 'Expand preview' : 'Collapse preview';
   });
+  // drag to reorder thumbnails (order persisted to localStorage)
+  el.addEventListener('dragstart', (e) => {
+    e.dataTransfer.setData('text/plain', name);
+    e.dataTransfer.effectAllowed = 'move';
+    el.classList.add('dragging');
+  });
+  el.addEventListener('dragend', () => el.classList.remove('dragging'));
+  el.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const from = e.dataTransfer.getData('text/plain');
+    if (from && from !== name) el.classList.add('drop-target');
+  });
+  el.addEventListener('dragleave', () => el.classList.remove('drop-target'));
+  el.addEventListener('drop', (e) => {
+    e.preventDefault();
+    el.classList.remove('drop-target');
+    const from = e.dataTransfer.getData('text/plain');
+    if (!from || from === name) return;
+    reorderCards(from, name);
+  });
   $cards.appendChild(el);
   const card = { el, preview, dot: el.querySelector('.dot'), collapseBtn };
   cardsEl.set(name, card);
   // start live snapshot loop for this session
   pollSnapshot(name);
+}
+
+// move the card named `from` to directly before the card named `to`
+function reorderCards(from, to) {
+  const fromEl = cardsEl.get(from)?.el;
+  const toEl = cardsEl.get(to)?.el;
+  if (!fromEl || !toEl) return;
+  $cards.insertBefore(fromEl, toEl);
+  persistCardOrder();
+}
+
+function persistCardOrder() {
+  const order = [...$cards.children].map((c) => c.dataset.name);
+  try { localStorage.setItem('deck-card-order', JSON.stringify(order)); } catch {}
+}
+
+function loadCardOrder(names) {
+  try {
+    const saved = JSON.parse(localStorage.getItem('deck-card-order') || '[]');
+    if (!Array.isArray(saved) || !saved.length) return names;
+    // keep saved order for known sessions, append any new ones at the end
+    const known = new Set(names);
+    const ordered = saved.filter((n) => known.has(n));
+    for (const n of names) if (!ordered.includes(n)) ordered.push(n);
+    return ordered;
+  } catch { return names; }
 }
 
 function sanitizeSnap(s) {
@@ -537,6 +615,6 @@ $btnZoom.addEventListener('click', () => {
   connect();
   applyThemeCss(state.theme);
   await refreshSessions();
-  // auto-select first real session if any
-  if (!state.active && cardsEl.size) setActive(cardsEl.keys().next().value);
+  // auto-select first real session if any (DOM order = saved user order)
+  if (!state.active && $cards.firstElementChild) setActive($cards.firstElementChild.dataset.name);
 })();
