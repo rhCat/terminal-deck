@@ -21,10 +21,10 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function parseArgs(argv) {
-  const opts = { port: 8787, open: false, banner: true };
+  const opts = { port: null, open: false, banner: true };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--port') opts.port = Number(argv[++i]) || 8787;
+    if (a === '--port') opts.port = Number(argv[++i]) || null;
     else if (a === '--open') opts.open = true;
     else if (a === '--no-banner') opts.banner = false;
     else if (a === '--help' || a === '-h') opts.help = true;
@@ -95,9 +95,13 @@ SESSIONS
   );
   fs.mkdirSync(sockDir, { recursive: true });
 
+  // Port resolution: --port flag > $PORT env > default 8787.
+  // (Earlier this unconditionally wrote 8787, clobbering PORT=9000 — fixed.)
+  const port = opts.port || Number(process.env.PORT) || 8787;
+
   const env = {
     ...process.env,
-    PORT: String(opts.port),
+    PORT: String(port),
     TMUX_SOCK_DIR: sockDir,
   };
 
@@ -110,8 +114,8 @@ SESSIONS
     process.stdout.write(d);
     if (!started && /listening/i.test(String(d))) {
       started = true;
-      if (opts.banner) banner(opts.port);
-      if (opts.open) openBrowser(opts.port);
+      if (opts.banner) banner(port);
+      if (opts.open) openBrowser(port);
     }
   });
 

@@ -19,8 +19,8 @@
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import * as pty from 'node-pty';
-import { spawn } from 'child_process';
-import { mkdirSync } from 'fs';
+import { spawn, execFileSync } from 'child_process';
+import { mkdirSync, existsSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -28,7 +28,24 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ---- tmux environment (rootless install on this box) ------------------------
-const TMUX_BIN = process.env.TMUX_BIN || 'tmux';
+// Resolve tmux to an ABSOLUTE path at startup so node-pty doesn't depend on the
+// caller's PATH (a conda/base shell on macOS can hide /opt/homebrew/bin, which
+// caused "posix_spawnp failed" crashes on attach).
+const _tmuxCandidates = (process.env.TMUX_BIN || 'tmux');
+let TMUX_BIN = _tmuxCandidates;
+try {
+  if (!process.env.TMUX_BIN) {
+    // 1) spawn-search via PATH; 2) fall back to standard Homebrew prefixes.
+    let abs = '';
+    try { abs = execFileSync('sh', ['-c', 'command -v tmux'], { encoding: 'utf8' }).trim(); } catch {}
+    if (!abs) {
+      for (const cand of ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmux']) {
+        if (existsSync(cand)) { abs = cand; break; }
+      }
+    }
+    if (abs) TMUX_BIN = abs;
+  }
+} catch { TMUX_BIN = _tmuxCandidates; } // keep 'tmux' -> spawn error surfaces later
 const TMUX_LIB_DIR = process.env.TMUX_LIB_DIR || null;
 const TMUX_SOCK_DIR = process.env.TMUX_SOCK_DIR || path.join(os.tmpdir(), 'terminal-deck');
 mkdirSync(TMUX_SOCK_DIR, { recursive: true });
@@ -142,10 +159,22 @@ const socketTokens = new Map();
 function openMain(ws, token, session, cols, rows) {
   // If we already have this token, just return (idempotent).
   if (mains.has(token)) return;
-  const p = pty.spawn(TMUX_BIN, ['-L', 'deck', 'attach', '-t', session], {
-    name: 'xterm-256color', cols: cols || 132, rows: rows || 43, cwd: os.homedir(),
-    env: tmuxEnv({ TERM: 'xterm-256color' }),
-  });
+  let p;
+  try {
+    p = pty.spawn(TMUX_BIN, ['-L', 'deck', 'attach', '-t', session], {
+      name: 'xterm-256color', cols: cols || 132, rows: rows || 43, cwd: os.homedir(),
+      env: tmuxEnv({ TERM: 'xterm-256color' }),
+    });
+  } catch (e) {
+    // A failed spawn must NEVER take down the whole deck — report to this pane.
+    console.error(`openMain: cannot spawn tmux for '${session}':`, e.message);
+    if (ws.readyState === ws.OPEN) {
+      ws.send(JSON.stringify({ t: 'data', token,
+        data: `\r\n[terminal-deck] cannot start terminal for '${session}': ${e.message}\r\n` }));
+      ws.send(JSON.stringify({ t: 'bye', token }));
+    }
+    return;
+  }
   p.onData((data) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'data', token, data })); });
   p.onExit(() => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'bye', token })); mains.delete(token); });
   mains.set(token, { pty: p, session });
