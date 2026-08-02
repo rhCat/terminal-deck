@@ -1,10 +1,18 @@
 #!/bin/sh
-# terminal-deck repair.sh — force-rebuilds the node-pty native addon.
+# terminal-deck repair.sh — repair the node-pty native layer on macOS.
 #
-# Root cause this fixes: node-pty's compiled binary (build/Release/) is missing
-# because npm skipped its postinstall build (usually ignore-scripts=true, or a
-# silently failed node-gyp step). Without it, every pty.spawn throws the generic
-# "posix_spawnp failed" even though tmux/node are perfectly fine.
+# Root cause this fixes: node-pty spawns its own helper binary (spawn-helper)
+# via posix_spawnp. Two things break that on a Mac:
+#   1. Gatekeeper quarantine xattr on the npm-downloaded helper -> kernel
+#      refuses the exec -> generic "posix_spawnp failed" on every pane.
+#   2. FORCING a compile (npm --build-from-source) DELETES node-pty's bundled
+#      prebuilt binaries (prebuilds/<platform>-<arch>/) and compiles ancient
+#      C++ against the current SDK — which fails on macOS 26's libc++
+#      (__atomic_unique_lock::__owns_lock removed).
+#
+# The fix: install NORMALLY (prebuilds load), strip quarantine, and never pass
+# --build-from-source. node-pty 1.1.0 ships prebuilt darwin-arm64 binaries in
+# the package tarball itself.
 #
 #   curl -fsSL https://raw.githubusercontent.com/rhCat/terminal-deck/master/repair.sh | sh
 #
@@ -12,58 +20,57 @@ set -u
 
 DECK_DIR="${TERMINAL_DECK_DIR:-$HOME/.terminal-deck}"
 [ -d "$DECK_DIR" ] || DECK_DIR="$(pwd)"
-echo "== terminal-deck repair: rebuilding node-pty in $DECK_DIR =="
+echo "== terminal-deck repair: fixing node-pty native layer in $DECK_DIR =="
 
 # 1) check the config that usually causes this
 echo ""
 echo "-- npm ignore-scripts: $(cd "$DECK_DIR" && npm config get ignore-scripts 2>&1)"
 
-# 1b) macOS Gatekeeper quarantine is a top cause of "posix_spawnp failed":
+# 2) macOS Gatekeeper quarantine is a top cause of "posix_spawnp failed":
 # node-pty spawns its own spawn-helper via posix_spawnp, and a quarantined
 # (npm-downloaded) helper is refused by the kernel. Strip it, if present.
 if [ "$(uname -s)" = "Darwin" ]; then
   echo "-- stripping com.apple.quarantine from node-pty binaries..."
-  find "$DECK_DIR/node_modules/node-pty" -name 'spawn-helper' -o -name 'pty.node' 2>/dev/null | while read -r f; do
+  xattr -dr com.apple.quarantine "$DECK_DIR/node_modules/node-pty" 2>/dev/null || true
+  find "$DECK_DIR/node_modules/node-pty" \( -name 'spawn-helper' -o -name 'pty.node' \) 2>/dev/null | while read -r f; do
     if xattr -p com.apple.quarantine "$f" >/dev/null 2>&1; then
       xattr -dr com.apple.quarantine "$f" && echo "   cleared quarantine: $f"
     fi
   done
-  echo "   done (xattr -dr com.apple.quarantine applied over the tree)"
-  xattr -dr com.apple.quarantine "$DECK_DIR/node_modules/node-pty" 2>/dev/null || true
+  echo "   done"
 fi
 
-# 2) wipe node_modules so nothing is "up to date" and skipped again
-echo "-- removing node_modules (forces a real build)..."
+# 3) wipe node_modules so the (correct) prebuilds are re-extracted fresh.
+#    IMPORTANT: plain `npm install` — NEVER --build-from-source, which deletes
+#    the bundled prebuilds and forces an SDK-incompatible compile.
+echo "-- removing node_modules + package-lock.json (fresh reinstall)..."
 rm -rf "$DECK_DIR/node_modules" "$DECK_DIR/package-lock.json"
-
-# 3) reinstall with scripts FORCED on and native build FROM SOURCE
-echo "-- npm install --foreground-scripts --build-from-source ..."
-if (cd "$DECK_DIR" && npm install --foreground-scripts --build-from-source) ; then
+echo "-- npm install (prebuilds load automatically; no compile)..."
+if (cd "$DECK_DIR" && npm install --foreground-scripts); then
   echo "npm install OK"
 else
-  echo ""
-  echo "!! npm install reported errors. If it mentions xcodebuild/gyp, run:"
-  echo "     xcode-select --install"
-  echo "   then re-run this script."
-  echo ""
-  # still continue so the check below reports the actual state
+  echo "!! npm install failed. Paste the error."
+  echo "   (If it still tries to compile node-pty, check for a global"
+  echo "    .npmrc setting npm_config_build_from_source=true:"
+  echo "    npm config get build-from-source  →  should print 'false')"
 fi
 
-# 4) verify the compiled addon exists
+# 4) verify the PREBUILT binaries are in place (not a compiled build)
 echo ""
-echo "-- verifying node-pty native build..."
-PTY_NODE="$DECK_DIR/node_modules/node-pty/build/Release/pty.node"
-HELPER="$DECK_DIR/node_modules/node-pty/build/Release/spawn-helper"
-if [ -e "$PTY_NODE" ]; then
-  echo "pty.node: PRESENT ($(ls -la "$PTY_NODE" | awk '{print $5}') bytes)"
-  file "$PTY_NODE" 2>&1
+echo "-- verifying node-pty prebuilt binaries..."
+PREBUILT="$DECK_DIR/node_modules/node-pty/prebuilds"
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64)  P="$PREBUILT/darwin-arm64" ;;
+  Darwin-x86_64) P="$PREBUILT/darwin-x64" ;;
+  *)             P="$PREBUILT" ;;
+esac
+if [ -f "$P/pty.node" ] && [ -f "$P/spawn-helper" ]; then
+  echo "prebuilds: PRESENT at $P"
+  ls -la "$P" | grep -E 'pty.node|spawn-helper'
+  xattr -p com.apple.quarantine "$P/spawn-helper" >/dev/null 2>&1 \
+    && echo "!! spawn-helper STILL quarantined" || echo "spawn-helper: quarantine clear"
 else
-  echo "pty.node: MISSING — node-pty still not compiled"
-fi
-if [ -e "$HELPER" ]; then
-  echo "spawn-helper: PRESENT"; file "$HELPER" 2>&1
-else
-  echo "spawn-helper: absent (not required on all platforms)"
+  echo "prebuilds: MISSING at $P — will need the full error log"
 fi
 
 # 5) live probe: does pty.spawn of tmux work now?
