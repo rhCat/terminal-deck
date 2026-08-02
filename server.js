@@ -20,7 +20,7 @@ import express from 'express';
 import { WebSocketServer } from 'ws';
 import * as pty from 'node-pty';
 import { spawn, execFileSync } from 'child_process';
-import { mkdirSync, existsSync } from 'fs';
+import { mkdirSync, existsSync, statSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -57,6 +57,7 @@ function tmuxEnv(extra) {
 }
 
 // ---- persistent tmux server -------------------------------------------------
+console.log('[terminal-deck] using tmux at:', TMUX_BIN);
 function ensureServer() {
   try { spawn(TMUX_BIN, ['-L', 'deck', 'start-server'], { env: tmuxEnv(), stdio: 'ignore' }); } catch (e) {
     console.error('tmux start-server failed:', e.message);
@@ -159,6 +160,24 @@ const socketTokens = new Map();
 function openMain(ws, token, session, cols, rows) {
   // If we already have this token, just return (idempotent).
   if (mains.has(token)) return;
+  // Pre-flight: node-pty's generic "posix_spawnp failed" hides the real cause.
+  // Give a precise error if tmux is missing or not executable.
+  try {
+    if (!existsSync(TMUX_BIN)) {
+      throw new Error(`tmux not found at resolved path '${TMUX_BIN}' — install it (brew install tmux) or set TMUX_BIN`);
+    }
+    if (process.platform !== 'win32') {
+      const st = statSync(TMUX_BIN);
+      if (!(st.mode & 0o111)) throw new Error(`tmux at '${TMUX_BIN}' is not executable (mode ${st.mode.toString(8)})`);
+    }
+  } catch (e) {
+    console.error(`openMain: preflight failed for '${session}':`, e.message);
+    if (ws.readyState === ws.OPEN) {
+      ws.send(JSON.stringify({ t: 'data', token, data: `\r\n[terminal-deck] ${e.message}\r\n` }));
+      ws.send(JSON.stringify({ t: 'bye', token }));
+    }
+    return;
+  }
   let p;
   try {
     p = pty.spawn(TMUX_BIN, ['-L', 'deck', 'attach', '-t', session], {
