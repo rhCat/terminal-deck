@@ -17,6 +17,7 @@
   --toolbar-h: 48px;
   --sorter-w: 200px;
   --notes-h: 130px;
+  --props-w: 300px;
 }
 
 * { box-sizing: border-box; }
@@ -35,6 +36,14 @@ body {
     "notes   notes";
   height: 100vh;
   overflow: hidden;
+}
+/* third column when props panel is shown */
+body.show-props {
+  grid-template-columns: var(--sorter-w) 1fr var(--props-w);
+  grid-template-areas:
+    "toolbar toolbar toolbar"
+    "sorter  stage   props"
+    "notes   notes   notes";
 }
 
 /* ---- toolbar ---- */
@@ -63,6 +72,42 @@ button {
 button:hover { border-color: var(--accent); }
 button.active { border-color: var(--accent); color: var(--accent); }
 #btn-close:hover { border-color: var(--danger); color: var(--danger); }
+.theme-picker { display: flex; align-items: center; gap: 4px; }
+.theme-picker select {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 7px; padding: 5px 8px; font-size: 13px; cursor: pointer;
+}
+.head-btn {
+  background: transparent; border: 1px solid var(--border); color: var(--muted);
+  font-size: 12px; padding: 4px 10px;
+}
+.head-btn:hover { color: var(--text); border-color: var(--accent); }
+
+/* ---- right properties panel ---- */
+#props {
+  grid-area: props; background: var(--panel); border-left: 1px solid var(--border);
+  display: flex; flex-direction: column; min-width: 0; overflow: hidden;
+}
+.props-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px; border-bottom: 1px solid var(--border); font-weight: 600;
+}
+.props-body { flex: 1; overflow-y: auto; padding: 8px 12px; font-size: 13px; }
+.prop-row {
+  display: flex; justify-content: space-between; gap: 10px;
+  padding: 6px 0; border-bottom: 1px dashed var(--border);
+}
+.prop-key { color: var(--muted); flex-shrink: 0; }
+.prop-val { text-align: right; word-break: break-all; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.props-section {
+  margin: 14px 0 6px; font-size: 11px; text-transform: uppercase;
+  letter-spacing: .08em; color: var(--muted);
+}
+.prop-history {
+  font-size: 11px; line-height: 1.4; color: #9aa4b5; white-space: pre-wrap;
+  background: rgba(0,0,0,.25); border-radius: 6px; padding: 8px; max-height: 240px; overflow-y: auto;
+}
 
 /* ---- sorter (left thumbnails) ---- */
 #sorter {
@@ -162,7 +207,7 @@ body.zoom {
     "toolbar"
     "stage";
 }
-body.zoom #sorter, body.zoom #notes { display: none; }
+body.zoom #sorter, body.zoom #notes, body.zoom #props { display: none; }
 
 /* ---- pure grid mode: sorter expands to a full grid of cards ---- */
 body.grid-only {

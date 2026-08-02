@@ -73,6 +73,7 @@ async function snapshot(session, cols = 80, rows = 24) {
 
 // ---- HTTP --------------------------------------------------------------------
 const app = express();
+app.use(express.json()); // parse JSON request bodies (POST /api/rename, /api/session.name, etc.)
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/api/sessions', async (_req, res) => {
@@ -85,6 +86,42 @@ app.post('/api/session', async (req, res) => {
   try { await tmux(['new-session', '-d', '-s', name, '-x', '132', '-y', '43']); }
   catch { /* exists */ }
   res.json({ ok: true, name });
+});
+
+app.post('/api/rename', async (req, res) => {
+  const old_ = String((req.body && req.body.old) || '').replace(/[^A-Za-z0-9._-]/g, '_');
+  const new_ = String((req.body && req.body.news) || '').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 64);
+  if (!old_ || !new_) return res.status(400).json({ ok: false, error: 'old & new required' });
+  try { await tmux(['rename-session', '-t', old_, new_]); res.json({ ok: true, old: old_, new: new_ }); }
+  catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/info', async (req, res) => {
+  const name = String(req.query.name || '').replace(/[^A-Za-z0-9._-]/g, '_');
+  if (!name) return res.status(400).json({ ok: false, error: 'name required' });
+  const run = (cmd) => new Promise((resolve) => {
+    let p;
+    try {
+      p = spawn(cmd[0], cmd.slice(1), { env: tmuxEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch { return resolve(''); }
+    let o = ''; p.stdout.on('data', (d) => (o += d));
+    p.on('error', () => resolve(''));   // e.g. binary not installed (tailscale)
+    p.on('close', () => resolve(o.trim()));
+  });
+  try {
+    const pwd = (await tmux(['display-message', '-t', name, '-p', '#{pane_current_path}'])).trim() || '—';
+    const hostname = (await run(['hostname'])).trim() || os.hostname();
+    let ip = (await run(['tailscale', 'ip', '-4'])).split('\n')[0].trim();
+    if (!ip) ip = (await run(['hostname', '-I'])).trim().split(/\s+/)[0] || '—';
+    const uptime = (await run(['uptime', '-p'])).trim() || '—';
+    const date = (await run(['date', '+%Y-%m-%d %H:%M:%S %Z'])).trim() || '—';
+    // recent console history: scrollback of the pane (last ~40 lines), faint hint
+    // that the shell history file may not be authoritative under detached tmux.
+    const hist = (await tmux(['capture-pane', '-t', name, '-p', '-J', '-S', '-40']).catch(() => '')).split('\n').slice(-40);
+    res.json({ ok: true, name, pwd, hostname, ip, uptime, date, history: hist });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 app.post('/api/kill', async (req, res) => {
