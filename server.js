@@ -101,7 +101,9 @@ async function listSessions() {
 async function snapshot(session, cols = 80, rows = 24) {
   // raw snapshot with no status line; strip tmux screen-control preamble that
   // capture-pane -p can prepend in control-ish contexts (rare)
-  const out = await tmux(['capture-pane', '-t', session, '-p', '-J', '-e']).catch(() => '');
+  // -S - : include scrollback history so the thumbnail shows the WHOLE
+  // terminal (the visible screen alone loses everything above it)
+  const out = await tmux(['capture-pane', '-t', session, '-p', '-J', '-e', '-S', '-']).catch(() => '');
   // tn: -e keeps escape sequences so ANSI color/format passes through to xterm
   return out;
 }

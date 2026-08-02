@@ -233,7 +233,25 @@ function connect() {
       if (state.active && msg.token === state.tokens[state.active]) setActive(null);
     } else if (msg.t === 'snap') {
       const card = cardsEl.get(msg.session);
-      if (card) card.preview.textContent = sanitizeSnap(msg.data).slice(0, cardPreviewChars(card));
+      if (card) {
+        // Show the LATEST lines (bottom of the terminal), not the top: keep
+        // the tail so the thumbnail reads like a real terminal viewport.
+        // Align to line boundaries so the top line is never a partial slice.
+        const clean = sanitizeSnap(msg.data);
+        const cap = cardPreviewChars(card);
+        if (clean.length <= cap) {
+          card.preview.textContent = clean;
+        } else {
+          const lines = clean.split('\n');
+          let out = ''; let used = 0;
+          for (let i = lines.length - 1; i >= 0; i--) {
+            const l = lines[i] + '\n';
+            if (used + l.length > cap && out) break;
+            out = l + out; used += l.length;
+          }
+          card.preview.textContent = out;
+        }
+      }
     }
   };
 }
