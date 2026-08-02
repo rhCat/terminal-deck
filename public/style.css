@@ -138,6 +138,16 @@ button.active { border-color: var(--accent); color: var(--accent); }
 .card-head .dots { display: flex; gap: 3px; }
 .card-head .dot { width: 7px; height: 7px; border-radius: 50%; background: #3a4152; }
 .dot.live { background: var(--accent-2); }
+.card-controls { display: flex; align-items: center; gap: 5px; }
+.card-collapse {
+  background: transparent; border: 1px solid var(--border); color: var(--muted);
+  border-radius: 4px; padding: 0 4px; font-size: 10px; line-height: 1; cursor: pointer;
+}
+.card-collapse:hover { color: var(--text); border-color: var(--accent); }
+/* collapsed: preview hidden, card becomes just the name row */
+.card.collapsed .card-preview { display: none; }
+.card.collapsed { cursor: default; }
+.card.collapsed .card-head { border-bottom: none; }
 .card-preview {
   height: 96px; padding: 4px; overflow: hidden;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

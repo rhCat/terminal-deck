@@ -30,7 +30,20 @@ assert.equal(await page.locator('#sorter').count(), 1, 'sorter');
 assert.equal(await page.locator('#stage').count(), 1, 'stage');
 assert.equal(await page.locator('#notes').count(), 1, 'notes');
 assert.ok(await page.locator('.card').count() >= 1, 'cards');
+assert.ok(await page.locator('.card').first().locator('.card-collapse').count() === 1, 'collapse button on cards');
 console.log('[1] layout + cards OK');
+
+// --- 1b) card collapse toggles preview ---
+const fc = page.locator('.card').first();
+assert.ok(await fc.locator('.card-preview').isVisible(), 'preview visible before');
+await fc.locator('.card-collapse').click();
+await page.waitForTimeout(200);
+assert.ok(!(await fc.locator('.card-preview').isVisible()), 'preview hidden after collapse');
+assert.ok(await fc.evaluate((el) => el.classList.contains('collapsed')), 'card.collapsed class set');
+await fc.locator('.card-collapse').click(); // expand back
+await page.waitForTimeout(200);
+assert.ok(await fc.locator('.card-preview').isVisible(), 'preview visible after expand');
+console.log('[1b] card collapse/expand OK');
 
 // --- 2) focus logs -> MAIN TERMINAL must actually stream (token-match fix) ---
 const logsCard = page.locator('.card', { hasText: 'logs' }).first();

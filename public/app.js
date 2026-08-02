@@ -183,12 +183,25 @@ function addCard(name) {
   el.dataset.name = name;
   el.innerHTML = `
     <div class="card-head"><span class="card-name"></span>
-      <span class="dots"><span class="dot live"></span></span></div>
+      <span class="card-controls"><span class="dot live"></span>
+        <button class="card-collapse" title="Collapse / expand preview">▾</button></span></div>
     <div class="card-preview"></div>`;
   el.querySelector('.card-name').textContent = name;
-  el.addEventListener('click', () => setActive(name));
+  el.addEventListener('click', (e) => {
+    // don't focus when clicking the collapse control
+    if (e.target.closest('.card-collapse')) return;
+    setActive(name);
+  });
+  const collapseBtn = el.querySelector('.card-collapse');
+  const preview = el.querySelector('.card-preview');
+  collapseBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const collapsed = el.classList.toggle('collapsed');
+    collapseBtn.textContent = collapsed ? '▸' : '▾';
+    collapseBtn.title = collapsed ? 'Expand preview' : 'Collapse preview';
+  });
   $cards.appendChild(el);
-  const card = { el, preview: el.querySelector('.card-preview'), dot: el.querySelector('.dot') };
+  const card = { el, preview, dot: el.querySelector('.dot'), collapseBtn };
   cardsEl.set(name, card);
   // start live snapshot loop for this session
   pollSnapshot(name);
@@ -207,7 +220,9 @@ function sanitizeSnap(s) {
 
 async function pollSnapshot(name) {
   const loop = async () => {
-    if (!cardsEl.has(name)) return; // card removed -> stop
+    const card = cardsEl.get(name);
+    if (!card) return; // card removed -> stop
+    if (card.el.classList.contains('collapsed')) { setTimeout(loop, SNAP_INTERVAL); return; } // preview hidden -> skip
     send({ t: 'snapshot', session: name });
     setTimeout(loop, SNAP_INTERVAL);
   };
