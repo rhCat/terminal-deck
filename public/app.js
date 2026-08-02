@@ -12,7 +12,25 @@ const state = {
   notes: {},         // session -> notes text (local, could be persisted server-side)
   tokens: {},        // session -> main terminal token
   theme: localStorage.getItem('deck-theme') || 'dark',
+  clipboard: localStorage.getItem('deck-clipboard') || '',  // shared across all terminals/panes
 };
+try { state.clipboard = localStorage.getItem('deck-clipboard') || ''; } catch { state.clipboard = ''; }
+
+// Base64 decode helper (browser-safe, handles UTF-8).
+function b64Decode(str) {
+  try {
+    const bin = atob(str.replace(/-/g, '+').replace(/_/g, '/'));
+    const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  } catch { return ''; }
+}
+function b64Encode(str) {
+  try {
+    const bytes = new TextEncoder().encode(str);
+    let bin = ''; bytes.forEach((b) => (bin += String.fromCharCode(b)));
+    return btoa(bin);
+  } catch { return ''; }
+}
 
 // ---------- DOM refs ----------
 const $cards = document.getElementById('cards');
@@ -35,6 +53,8 @@ const $modal = document.getElementById('modal');
 const $newName = document.getElementById('new-name');
 const $modalRename = document.getElementById('modal-rename');
 const $renameInput = document.getElementById('rename-input');
+const $btnClip = document.getElementById('btn-clip');
+const $clipPop = document.getElementById('clip-pop');
 
 const THEMES = {
   dark:     { background: '#000000', foreground: '#d7dce6', cursor: '#d7dce6',
@@ -106,6 +126,7 @@ function ensureTerm() {
     cursorBlink: true,
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
     fontSize: 13,
+    allowProposedApi: true, // enables parser.registerOscHandler for OSC 52 clipboard
     theme: THEMES[state.theme] || THEMES.dark,
     scrollback: 4000,
   });
@@ -113,8 +134,46 @@ function ensureTerm() {
   term.loadAddon(fit);
   term.open($termEl);
   term.onData((d) => sendInput(d));
+  // OSC 52: when a pane writes to the clipboard (e.g. tmux copy-mode, vim yank),
+  // capture it into the deck's SHARED clipboard so it's available across panes.
+  try {
+    term.parser.registerOscHandler(52, (data) => {
+      // data = "c;<base64>" or "<base64>" ; second segment is the base64 payload
+      const idx = data.indexOf(';');
+      const payload = idx >= 0 ? data.slice(idx + 1) : data;
+      const text = b64Decode(payload);
+      if (text) setSharedClipboard(text);
+      return false; // also let xterm do its own clipboard handling
+    });
+  } catch (e) { console.warn('osc52 handler unavailable:', e); }
   requestAnimationFrame(() => { fit.fit(); resizeMain(); });
 }
+
+// ---- shared clipboard ----
+function setSharedClipboard(text) {
+  state.clipboard = text;
+  try { localStorage.setItem('deck-clipboard', text); } catch {}
+  const el = document.getElementById('cb-value');
+  if (el) el.textContent = text;
+  const count = document.getElementById('cb-len');
+  if (count) count.textContent = text.length + ' chars';
+}
+function pasteToFocused(text) {
+  if (!state.active || !state.tokens[state.active]) return;
+  if (text == null) text = state.clipboard;
+  // bracketed paste so multiline history is pasted verbatim
+  const t = String(text).replace(/\r?\n/g, '\r');
+  send({ t: 'input', token: state.tokens[state.active], data: '\x1b[200~' + t + '\x1b[201~' });
+}
+function copySelectionToClipboard() {
+  if (!term) return;
+  const sel = term.getSelection();
+  if (sel) setSharedClipboard(sel);
+}
+// Expose clipboard helpers for programmatic use / testing.
+window.setSharedClipboard = setSharedClipboard;
+window.getSharedClipboard = () => state.clipboard;
+window.pasteToFocused = pasteToFocused;
 function resizeMain() {
   // Keep the tmux pane in sync with the actual visible viewport so the prompt
   // sits at the bottom of the screen and history flows down from the top.
@@ -139,6 +198,24 @@ $themeSelect.addEventListener('change', () => {
 function applyThemeCss(theme) {
   document.body.style.background = (THEMES[theme] || THEMES.dark).background;
 }
+
+// ---------- clipboard popover ----------
+function refreshClipboardUI() {
+  setSharedClipboard(state.clipboard); // repaint len + value
+}
+$btnClip.addEventListener('click', () => {
+  const show = $clipPop.classList.toggle('hidden');
+  $btnClip.classList.toggle('active', !show);
+  if (!show) refreshClipboardUI();
+});
+document.getElementById('clip-close').addEventListener('click', () => {
+  $clipPop.classList.add('hidden'); $btnClip.classList.remove('active');
+});
+document.getElementById('clip-copy-sel').addEventListener('click', copySelectionToClipboard);
+document.getElementById('clip-paste').addEventListener('click', () => pasteToFocused());
+document.getElementById('clip-clear').addEventListener('click', () => setSharedClipboard(''));
+// Escape closes popover too
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { $clipPop.classList.add('hidden'); $btnClip.classList.remove('active'); } });
 
 // ---------- WebSocket ----------
 let ws = null;

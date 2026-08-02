@@ -40,10 +40,24 @@ await fc.locator('.card-collapse').click();
 await page.waitForTimeout(200);
 assert.ok(!(await fc.locator('.card-preview').isVisible()), 'preview hidden after collapse');
 assert.ok(await fc.evaluate((el) => el.classList.contains('collapsed')), 'card.collapsed class set');
+await page.screenshot({ path: OUT + '/09-collapsed.png' }); // show collapse-to-name-only
 await fc.locator('.card-collapse').click(); // expand back
 await page.waitForTimeout(200);
 assert.ok(await fc.locator('.card-preview').isVisible(), 'preview visible after expand');
 console.log('[1b] card collapse/expand OK');
+
+// --- 1c) shared clipboard capture + popover ---
+await page.evaluate(() => { try { window.setSharedClipboard('shared clip from deck'); } catch {} });
+await page.locator('#btn-clip').click();
+await page.waitForTimeout(300);
+const clipVal = (await page.locator('#cb-value').textContent()) || '';
+assert.ok(clipVal.includes('shared clip from deck'), 'clipboard popover shows shared value');
+const clipLen = (await page.locator('#cb-len').textContent()) || '';
+assert.ok(/chars/.test(clipLen), 'clipboard length label shown');
+await page.screenshot({ path: OUT + '/10-clipboard.png' });
+await page.locator('#btn-clip').click(); // close popover
+await page.waitForTimeout(200);
+console.log('[1c] shared clipboard popover OK');
 
 // --- 2) focus logs -> MAIN TERMINAL must actually stream (token-match fix) ---
 const logsCard = page.locator('.card', { hasText: 'logs' }).first();

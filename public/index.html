@@ -33,6 +33,7 @@
       </select>
     </label>
     <button id="btn-demo" title="Send a colorful demo command to the focused work">▶ Demo</button>
+    <button id="btn-clip" title="Shared clipboard across all works">📋 Clip</button>
     <span class="divider"></span>
     <button id="btn-new" title="New session (new slide)">＋ New work</button>
     <span class="divider"></span>
@@ -86,6 +87,21 @@
   <div class="notes-label">Notes</div>
   <textarea id="notes-text" placeholder="Write notes for this work (per-slide speaker notes)..."></textarea>
 </footer>
+
+<!-- clipboard popover -->
+<div id="clip-pop" class="hidden">
+  <div class="clip-head">
+    <span>Shared clipboard</span>
+    <span id="cb-len" class="muted"></span>
+    <button id="clip-close" class="head-btn">✕</button>
+  </div>
+  <pre id="cb-value" class="clip-value"></pre>
+  <div class="clip-actions">
+    <button id="clip-copy-sel" title="Copy current terminal selection into shared clipboard">Copy selection</button>
+    <button id="clip-paste" class="primary" title="Paste shared clipboard into focused work">Paste to focused</button>
+    <button id="clip-clear" title="Clear shared clipboard">Clear</button>
+  </div>
+</div>
 
 <!-- rename modal -->
 <div id="modal-rename" class="hidden">
