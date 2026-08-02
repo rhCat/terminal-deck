@@ -233,25 +233,7 @@ function connect() {
       if (state.active && msg.token === state.tokens[state.active]) setActive(null);
     } else if (msg.t === 'snap') {
       const card = cardsEl.get(msg.session);
-      if (card) {
-        // Show the LATEST lines (bottom of the terminal), not the top: keep
-        // the tail so the thumbnail reads like a real terminal viewport.
-        // Align to line boundaries so the top line is never a partial slice.
-        const clean = sanitizeSnap(msg.data);
-        const cap = cardPreviewChars(card);
-        if (clean.length <= cap) {
-          card.preview.textContent = clean;
-        } else {
-          const lines = clean.split('\n');
-          let out = ''; let used = 0;
-          for (let i = lines.length - 1; i >= 0; i--) {
-            const l = lines[i] + '\n';
-            if (used + l.length > cap && out) break;
-            out = l + out; used += l.length;
-          }
-          card.preview.textContent = out;
-        }
-      }
+      if (card) renderThumb(card, msg.data);
     }
   };
 }
@@ -302,15 +284,28 @@ function addCard(name) {
   pollSnapshot(name);
 }
 
-function cardPreviewChars(card) {
-  const w = card.preview.clientWidth || 200;
-  const h = card.preview.clientHeight || 96;
-  return Math.floor((w / 4.2) * (h / 9) * 2); // rough, tiny mono font
-}
-
 function sanitizeSnap(s) {
   // strip ANSI escapes for the thumbnail (plain text preview is fine)
   return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
+}
+
+// Render a FULL terminal thumbnail: the entire captured content (visible screen
+// + scrollback) with the font shrunk to fit the card. No truncation — the card
+// reads like a zoomed-out screenshot of the whole terminal.
+function renderThumb(card, raw) {
+  const el = card.preview;
+  const clean = sanitizeSnap(raw).replace(/\s+$/, '');
+  el.textContent = clean;
+  // fit font size so ALL lines fit the card height — no truncation. The user
+  // explicitly accepts tiny fonts for a true full-screen thumbnail.
+  // account for the preview's 4px top+bottom padding: usable height = h - 8
+  const h = (el.clientHeight || 96) - 8;
+  const lineCount = clean.split('\n').length;
+  const BASE = 7; // px, the normal thumbnail font
+  const MIN = 1;  // px, hard readability floor
+  const lineH = 1.25; // CSS line-height on .card-preview
+  const fit = Math.floor((h / (lineCount * lineH)) * 10) / 10;
+  el.style.fontSize = Math.max(MIN, Math.min(BASE, fit)) + 'px';
 }
 
 async function pollSnapshot(name) {
