@@ -157,6 +157,31 @@ const mains = new Map();
 // sockets -> Set<token> so we can reap when a browser disconnects
 const socketTokens = new Map();
 
+function diagnoseSpawn() {
+  // node-pty's generic "posix_spawnp failed" hides the real cause on macOS.
+  // Gather: arch, node-pty's helper binary, cwd, and a plain-spawn probe.
+  const lines = [];
+  try { lines.push(`node=${process.version} arch=${process.arch} platform=${process.platform}`); } catch {}
+  try { lines.push(`tmux=${TMUX_BIN} exists=${existsSync(TMUX_BIN)}`); } catch {}
+  try {
+    // node-pty ships a native helper (spawn-helper); missing/wrong-arch breaks spawn.
+    const p = path.join(__dirname, 'node_modules', 'node-pty', 'build', 'Release', 'spawn-helper');
+    lines.push(`spawn-helper=${p} exists=${existsSync(p)}`);
+  } catch {}
+  try {
+    const home = os.homedir();
+    lines.push(`cwd=${home} exists=${existsSync(home)}`);
+  } catch {}
+  try {
+    // If plain spawn of tmux works, node-pty's native layer is the problem.
+    const r = execFileSync(TMUX_BIN, ['-V'], { encoding: 'utf8', timeout: 5000 });
+    lines.push(`plain-spawn tmux -V => OK (${r.trim()})`);
+  } catch (e2) {
+    lines.push(`plain-spawn tmux -V => FAILED: ${e2.message}`);
+  }
+  return '[diag] ' + lines.join(' | ');
+}
+
 function openMain(ws, token, session, cols, rows) {
   // If we already have this token, just return (idempotent).
   if (mains.has(token)) return;
@@ -186,10 +211,12 @@ function openMain(ws, token, session, cols, rows) {
     });
   } catch (e) {
     // A failed spawn must NEVER take down the whole deck — report to this pane.
-    console.error(`openMain: cannot spawn tmux for '${session}':`, e.message);
+    // node-pty's "posix_spawnp failed" is generic; gather the real facts.
+    const diag = diagnoseSpawn();
+    console.error(`openMain: cannot spawn tmux for '${session}':`, e.message, diag);
     if (ws.readyState === ws.OPEN) {
       ws.send(JSON.stringify({ t: 'data', token,
-        data: `\r\n[terminal-deck] cannot start terminal for '${session}': ${e.message}\r\n` }));
+        data: `\r\n[terminal-deck] cannot start terminal for '${session}': ${e.message}\r\n${diag}\r\n` }));
       ws.send(JSON.stringify({ t: 'bye', token }));
     }
     return;
