@@ -1,0 +1,129 @@
+#!/usr/bin/env node
+// terminal-deck — drop-in CLI command.
+//
+//   terminal-deck                 # start the server on :8787 and print the URL
+//   terminal-deck --port 9000     # custom port
+//   terminal-deck --open          # open the browser once up (macOS/Linux/Windows)
+//   terminal-deck --no-banner     # quiet startup
+//   terminal-deck --help
+//
+// Dependency: tmux on PATH (brew install tmux). terminal-deck keeps tmux as a
+// runtime it fires over the terminal — no standalone daemon required.
+//
+// The CLI spawns the real server (index.js) as a child so Ctrl-C exits the CLI
+// cleanly while the tmux sessions (the actual persisted work) keep running.
+import { spawn } from 'child_process';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+function parseArgs(argv) {
+  const opts = { port: 8787, open: false, banner: true };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--port') opts.port = Number(argv[++i]) || 8787;
+    else if (a === '--open') opts.open = true;
+    else if (a === '--no-banner') opts.banner = false;
+    else if (a === '--help' || a === '-h') opts.help = true;
+  }
+  return opts;
+}
+
+function banner(port) {
+  console.log('');
+  console.log('  ▦  terminal-deck');
+  console.log('     PowerPoint-style live terminal deck on persistent tmux');
+  console.log('');
+  console.log(`     →  http://localhost:${port}`);
+  console.log('     Ctrl-C exits this CLI; tmux sessions keep running.');
+  console.log('');
+}
+
+function commandExists(bin) {
+  return new Promise((resolve) => {
+    const p = spawn('sh', ['-c', 'command -v ' + bin], { stdio: 'ignore' });
+    p.on('error', () => resolve(false));
+    p.on('exit', (c) => resolve(c === 0));
+  });
+}
+
+function openBrowser(port) {
+  const url = `http://localhost:${port}`;
+  let cmd;
+  if (process.platform === 'darwin') cmd = ['open', url];
+  else if (process.platform === 'win32') cmd = ['cmd', '/c', 'start', url];
+  else cmd = ['xdg-open', url];
+  try { spawn(cmd[0], cmd.slice(1), { detached: true, stdio: 'ignore' }).unref(); } catch {}
+}
+
+async function run() {
+  const opts = parseArgs(process.argv.slice(2));
+  if (opts.help) {
+    console.log(`terminal-deck — PowerPoint-style live terminal manager on persistent tmux
+
+USAGE
+  terminal-deck [--port N] [--open] [--no-banner]
+
+OPTIONS
+  --port N     HTTP port (default 8787)
+  --open       open the deck in the default browser once ready
+  --no-banner  start quietly (still prints the URL)
+  --help       this help
+
+REQUIRES
+  tmux on PATH (brew install tmux) — used as the persistent session runtime.
+
+SESSIONS
+  Each work = one tmux session. Closing this CLI or the browser does NOT kill
+  the sessions; reconnect by running terminal-deck again.
+`);
+    return;
+  }
+
+  // tmux is a hard runtime dependency — fail fast with a clear message.
+  const haveTmux = process.env.TMUX_BIN ? true : await commandExists('tmux');
+  if (!haveTmux) {
+    console.error('terminal-deck: tmux not found on PATH.\n  Install it:  brew install tmux');
+    process.exit(1);
+  }
+
+  const sockDir = process.env.TMUX_SOCK_DIR || path.join(
+    process.env.XDG_RUNTIME_DIR || os.tmpdir(), 'terminal-deck'
+  );
+  fs.mkdirSync(sockDir, { recursive: true });
+
+  const env = {
+    ...process.env,
+    PORT: String(opts.port),
+    TMUX_SOCK_DIR: sockDir,
+  };
+
+  const child = spawn('node', [path.join(__dirname, '..', 'index.js')], {
+    env, stdio: ['inherit', 'pipe', 'inherit'],
+  });
+
+  let started = false;
+  child.stdout.on('data', (d) => {
+    process.stdout.write(d);
+    if (!started && /listening/i.test(String(d))) {
+      started = true;
+      if (opts.banner) banner(opts.port);
+      if (opts.open) openBrowser(opts.port);
+    }
+  });
+
+  child.on('exit', (code) => {
+    if (!started && opts.banner) console.log(`terminal-deck: server exited (code ${code})`);
+    process.exit(code || 0);
+  });
+
+  // Ctrl-C / SIGTERM: tear down server child, leave tmux sessions intact.
+  const down = () => { try { child.kill('SIGINT'); } catch {} setTimeout(() => process.exit(0), 400); };
+  process.on('SIGINT', down);
+  process.on('SIGTERM', down);
+}
+
+run();

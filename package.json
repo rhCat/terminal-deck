@@ -3,9 +3,13 @@
   "version": "0.1.0",
   "description": "PowerPoint-style live thumbnail terminal manager built on tmux persistence",
   "type": "module",
-  "main": "server.js",
+  "main": "index.js",
+  "bin": {
+    "terminal-deck": "bin/terminal-deck"
+  },
   "scripts": {
-    "start": "node server.js"
+    "start": "node bin/terminal-deck",
+    "start:raw": "node index.js"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

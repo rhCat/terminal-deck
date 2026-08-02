@@ -43,13 +43,28 @@ public/
 
 ## Run
 
-Requires **Node.js ≥ 18** and **tmux** on `PATH` (any normal Linux/macOS has it).
+Requires **Node.js ≥ 18** and **tmux** on `PATH` (any normal Linux/macOS has it; on macOS `brew install tmux`).
+
+`terminal-deck` is a **drop-in CLI command** — you fire it over the terminal, it launches the server, and Ctrl-C exits the CLI while your tmux sessions keep running.
 
 ```bash
-npm install          # compiles node-pty (needs build tools: python3, make, g++)
-node index.js        # -> http://localhost:8787
+npm install                 # compiles node-pty (needs build tools: python3, make, g++)
+npm link                    # exposes `terminal-deck` on your PATH (or: npm install -g .)
+terminal-deck               # -> http://localhost:8787
 ```
 
+Or without linking, `npm start` does the same thing.
+
+### CLI reference
+```
+terminal-deck                 # start on :8787
+terminal-deck --port 9000     # custom port
+terminal-deck --open          # open the deck in the default browser once ready
+terminal-deck --no-banner     # quiet startup
+terminal-deck --help
+```
+
+Run it from any directory — it always fires up the same deck serving your tmux sessions.
 Open the URL, click **＋ New work** to add slides/sessions, click a card to focus it, use **⊞ Grid** / **⛶ Zoom** to change the view. Sessions persist in tmux between reloads.
 
 ### Rootless tmux (this VPS quirk)
