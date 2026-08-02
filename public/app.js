@@ -328,7 +328,10 @@ function setActive(name) {
 }
 
 function attachMain(name) {
-  if (state.tokens[name]) { if (term) term.clear(); return; }
+  // ALWAYS re-attach on activation: a cached token does NOT mean the screen is
+  // intact — the xterm buffer gets cleared on switch, and tmux only sends a
+  // full redraw to a freshly attached client. Re-sending 'main' makes the
+  // server respawn the attach pty so the pane repaints completely.
   const token = 'main:' + name;
   state.tokens[name] = token;
   ensureTerm();

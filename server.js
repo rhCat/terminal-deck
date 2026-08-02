@@ -195,8 +195,15 @@ function diagnoseSpawn() {
 }
 
 function openMain(ws, token, session, cols, rows) {
-  // If we already have this token, just return (idempotent).
-  if (mains.has(token)) return;
+  // Re-attach semantics: every activation re-spawns the attach pty so tmux
+  // sends a FULL screen redraw (tmux only fully repaints a fresh client).
+  // Kill any existing pty for this token first — but suppress its 'bye' so
+  // the client doesn't see a bogus session-end.
+  const old = mains.get(token);
+  if (old) {
+    mains.delete(token);
+    try { old.pty._suppressBye = true; old.pty.kill(); } catch {}
+  }
   // Pre-flight: node-pty's generic "posix_spawnp failed" hides the real cause.
   // Give a precise error if tmux is missing or not executable.
   try {
@@ -221,6 +228,7 @@ function openMain(ws, token, session, cols, rows) {
       name: 'xterm-256color', cols: cols || 132, rows: rows || 43, cwd: os.homedir(),
       env: tmuxEnv({ TERM: 'xterm-256color' }),
     });
+    console.error(`[td] ${new Date().toISOString().slice(11,19)} pty spawn token=${token} session=${session} pid=${p.pid}`);
   } catch (e) {
     // A failed spawn must NEVER take down the whole deck — report to this pane.
     // node-pty's "posix_spawnp failed" is generic; gather the real facts.
@@ -234,7 +242,11 @@ function openMain(ws, token, session, cols, rows) {
     return;
   }
   p.onData((data) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'data', token, data })); });
-  p.onExit(() => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'bye', token })); mains.delete(token); });
+  p.onExit(({ exitCode, signal }) => {
+    console.error(`[td] ${new Date().toISOString().slice(11,19)} pty exit token=${token} session=${session} code=${exitCode} sig=${signal} suppress=${!!p._suppressBye}`);
+    if (!p._suppressBye && ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'bye', token }));
+    mains.delete(token);
+  });
   mains.set(token, { pty: p, session });
   if (!socketTokens.has(ws)) socketTokens.set(ws, new Set());
   socketTokens.get(ws).add(token);
