@@ -67,6 +67,31 @@ const THEMES = {
               blue:'#7aa2f7', magenta:'#bb9af7', cyan:'#7dcfff', white:'#a9b1d6',
               brightBlack:'#414868', brightRed:'#f7768e', brightGreen:'#9ece6a', brightYellow:'#e0af68',
               brightBlue:'#7aa2f7', brightMagenta:'#bb9af7', brightCyan:'#7dcfff', brightWhite:'#c0caf5' },
+  eyeGuard: { background: '#002b36', foreground: '#839496', cursor: '#93a1a1', selection: '#073642',
+              black:'#073642', red:'#dc322f', green:'#859900', yellow:'#b58900',
+              blue:'#268bd2', magenta:'#d33682', cyan:'#2aa198', white:'#eee8d5',
+              brightBlack:'#586e75', brightRed:'#dc322f', brightGreen:'#859900', brightYellow:'#b58900',
+              brightBlue:'#268bd2', brightMagenta:'#d33682', brightCyan:'#2aa198', brightWhite:'#fdf6e3' },
+  ocean:    { background: '#0b2b40', foreground: '#d7e9f7', cursor: '#7fd4ff', selection: '#1e4a63',
+              black:'#0b2b40', red:'#ff5f87', green:'#5fd7a7', yellow:'#ffd787',
+              blue:'#5fafff', magenta:'#af87ff', cyan:'#62d6ff', white:'#d7e9f7',
+              brightBlack:'#4a6b80', brightRed:'#ff8faf', brightGreen:'#8ff7cf', brightYellow:'#ffe7af',
+              brightBlue:'#8fc7ff', brightMagenta:'#cfafff', brightCyan:'#a2e7ff', brightWhite:'#eaf7ff' },
+  forest:   { background: '#0f1f0f', foreground: '#cfe8c0', cursor: '#b8e08a', selection: '#1e3a1e',
+              black:'#0f1f0f', red:'#d05555', green:'#8fd26f', yellow:'#d8c060',
+              blue:'#6fa0c0', magenta:'#b080c0', cyan:'#65c0a0', white:'#cfe8c0',
+              brightBlack:'#4a6a4a', brightRed:'#e07070', brightGreen:'#a0e080', brightYellow:'#e8d070',
+              brightBlue:'#80b8e0', brightMagenta:'#c090d0', brightCyan:'#78d0b0', brightWhite:'#e8ffe0' },
+  violet:   { background: '#1c162a', foreground: '#ddd0f0', cursor: '#c8a8f0', selection: '#3a2a52',
+              black:'#241c38', red:'#f06878', green:'#a8e068', yellow:'#f0d068',
+              blue:'#8fa0f0', magenta:'#d088f0', cyan:'#7fd0e0', white:'#ddd0f0',
+              brightBlack:'#5a4a76', brightRed:'#f88a98', brightGreen:'#c0e888', brightYellow:'#f8e088',
+              brightBlue:'#aab0f8', brightMagenta:'#e0a0f8', brightCyan:'#98e0f0', brightWhite:'#f0e8ff' },
+  sepia:    { background: '#f5f0e6', foreground: '#3b342c', cursor: '#6b5a45', selection: '#d8cbb0',
+              black:'#3b342c', red:'#a05030', green:'#5a7a40', yellow:'#9a7a20',
+              blue:'#406080', magenta:'#7a5070', cyan:'#3a7060', white:'#d6cdbd',
+              brightBlack:'#8a7f6f', brightRed:'#b06040', brightGreen:'#6a8a50', brightYellow:'#aa8a30',
+              brightBlue:'#507090', brightMagenta:'#8a6080', brightCyan:'#4a8070', brightWhite:'#f0eadd' },
 };
 
 // ---------- xterm (main stage) ----------
@@ -111,11 +136,12 @@ function connect() {
   ws.onclose = () => setTimeout(connect, 1500);
   ws.onmessage = (ev) => {
     let msg; try { msg = JSON.parse(ev.data); } catch { return; }
-    if (msg.t === 'data' && msg.token === state.active) {
+    const activeTok = state.active ? state.tokens[state.active] : null;
+    if (msg.t === 'data' && activeTok && msg.token === activeTok) {
       if (term) term.write(msg.data);
     } else if (msg.t === 'bye') {
       // session ended
-      if (msg.token === state.active) setActive(null);
+      if (state.active && msg.token === state.tokens[state.active]) setActive(null);
     } else if (msg.t === 'snap') {
       const card = cardsEl.get(msg.session);
       if (card) card.preview.textContent = sanitizeSnap(msg.data).slice(0, cardPreviewChars(card));
