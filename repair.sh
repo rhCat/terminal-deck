@@ -69,6 +69,15 @@ if [ -f "$P/pty.node" ] && [ -f "$P/spawn-helper" ]; then
   ls -la "$P" | grep -E 'pty.node|spawn-helper'
   xattr -p com.apple.quarantine "$P/spawn-helper" >/dev/null 2>&1 \
     && echo "!! spawn-helper STILL quarantined" || echo "spawn-helper: quarantine clear"
+  # node-pty packaging bug: the prebuilt spawn-helper ships 0644 (no exec bit);
+  # macOS execs it via posix_spawnp -> EACCES -> "posix_spawnp failed". Fix it.
+  if [ ! -x "$P/spawn-helper" ]; then
+    echo "!! spawn-helper has no exec bit (node-pty prebuild bug) — fixing..."
+    chmod +x "$P/spawn-helper"
+    echo "   chmod +x applied: $(ls -la "$P/spawn-helper" | awk '{print $1}')"
+  else
+    echo "spawn-helper: exec bit present"
+  fi
 else
   echo "prebuilds: MISSING at $P — will need the full error log"
 fi

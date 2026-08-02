@@ -20,7 +20,7 @@ import express from 'express';
 import { WebSocketServer } from 'ws';
 import * as pty from 'node-pty';
 import { spawn, execFileSync } from 'child_process';
-import { mkdirSync, existsSync, statSync } from 'fs';
+import { mkdirSync, existsSync, statSync, chmodSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -58,6 +58,18 @@ function tmuxEnv(extra) {
 
 // ---- persistent tmux server -------------------------------------------------
 console.log('[terminal-deck] using tmux at:', TMUX_BIN);
+// node-pty packaging bug: the prebuilt darwin spawn-helper ships WITHOUT the
+// execute bit (prebuilds/<plat>-<arch>/spawn-helper is 0644), and macOS execs
+// it via posix_spawnp -> EACCES -> the generic "posix_spawnp failed". Fix it
+// in place so the deck self-heals on any platform that execs the helper.
+try {
+  const helper = path.join(__dirname, 'node_modules', 'node-pty', 'prebuilds',
+    `${process.platform}-${process.arch}`, 'spawn-helper');
+  if (existsSync(helper)) {
+    const m = statSync(helper).mode;
+    if (!(m & 0o111)) { chmodSync(helper, m | 0o111); console.log('[terminal-deck] chmod +x spawn-helper (node-pty prebuild fix)'); }
+  }
+} catch (e) { console.error('[terminal-deck] spawn-helper chmod skipped:', e.message); }
 function ensureServer() {
   try { spawn(TMUX_BIN, ['-L', 'deck', 'start-server'], { env: tmuxEnv(), stdio: 'ignore' }); } catch (e) {
     console.error('tmux start-server failed:', e.message);
