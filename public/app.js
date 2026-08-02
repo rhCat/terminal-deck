@@ -335,8 +335,7 @@ function attachMain(name) {
   const token = 'main:' + name;
   state.tokens[name] = token;
   ensureTerm();
-  // a touch of delay for the xterm to be open + fitted to the real viewport
-  setTimeout(() => {
+  const attach = () => {
     // fit to the actual panel size first, then attach the pty at that size
     try { fit.fit(); } catch {}
     const cols = Math.max(20, term.cols || 80);
@@ -346,7 +345,11 @@ function attachMain(name) {
     send({ t: 'resize', token, cols, rows });
     if (term) term.clear();
     if (term) term.scrollToBottom();
-  }, 80);
+  };
+  // First attach: wait a beat for xterm to be open + fitted. Re-activation:
+  // the term is already fitted, so attach immediately for snappy switching.
+  if (term && term.cols) attach();
+  else setTimeout(attach, 80);
 }
 
 function sendInput(data) {
