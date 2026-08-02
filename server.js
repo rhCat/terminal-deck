@@ -217,5 +217,5 @@ export function attachTo(server) {
   });
 }
 
-const PORT = process.env.PORT || 8787;
+const PORT = process.env.PORT || 9000;
 export { app, listSessions, tmux, TMUX_BIN, TMUX_SOCK_DIR };

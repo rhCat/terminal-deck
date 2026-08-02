@@ -31,7 +31,7 @@ Browser (xterm.js × N)  ── WebSocket ──>  Node server
 ## Project layout
 ```
 server.js      Node backend: HTTP (express) + WebSocket (ws) + node-pty + tmux
-index.js       entry point (boots HTTP + WS on PORT, default 8787)
+index.js       entry point (boots HTTP + WS on PORT, default 9000)
 public/
   index.html   the deck UI (toolbar / sorter / stage / notes)
   style.css    PowerPoint layout + zoom + grid view
@@ -50,14 +50,14 @@ Requires **Node.js ≥ 18** and **tmux** on `PATH` (any normal Linux/macOS has i
 ```bash
 npm install                 # compiles node-pty (needs build tools: python3, make, g++)
 npm link                    # exposes `terminal-deck` on your PATH (or: npm install -g .)
-terminal-deck               # -> http://localhost:8787
+terminal-deck               # -> http://localhost:9000
 ```
 
 Or without linking, `npm start` does the same thing.
 
 ### CLI reference
 ```
-terminal-deck                 # start on :8787
+terminal-deck                 # start on :9000
 terminal-deck --port 9000     # custom port
 terminal-deck --open          # open the deck in the default browser once ready
 terminal-deck --no-banner     # quiet startup

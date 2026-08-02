@@ -5,13 +5,13 @@
 //   * rename via modal
 //   * color demo into the focused pane
 //   * foldable properties panel (pwd / ip / history)
-// Screenshots -> dev/screenshots. Run against the server on localhost:8787.
+// Screenshots -> dev/screenshots. Run against the server on localhost:9000.
 import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
 import assert from 'node:assert';
 import { fileURLToPath } from 'node:url';
 
-const BASE = 'http://127.0.0.1:8787';
+const BASE = 'http://127.0.0.1:9000';
 const OUT = new URL('./screenshots', import.meta.url).pathname;
 mkdirSync(OUT, { recursive: true });
 

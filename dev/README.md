@@ -15,7 +15,7 @@ Headless UI verification for terminal-deck, run against the live server.
 ## How to re-run
 
 ```bash
-# start the server (see README) — it must be on localhost:8787
+# start the server (see README) — it must be on localhost:9000
 node index.js &
 
 # install playwright (isolated dir avoids polluting the app deps)

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // terminal-deck — drop-in CLI command.
 //
-//   terminal-deck                 # start the server on :8787 and print the URL
+//   terminal-deck                 # start the server on :9000 and print the URL
 //   terminal-deck --port 9000     # custom port
 //   terminal-deck --open          # open the browser once up (macOS/Linux/Windows)
 //   terminal-deck --no-banner     # quiet startup
@@ -68,7 +68,7 @@ USAGE
   terminal-deck [--port N] [--open] [--no-banner]
 
 OPTIONS
-  --port N     HTTP port (default 8787)
+  --port N     HTTP port (default 9000)
   --open       open the deck in the default browser once ready
   --no-banner  start quietly (still prints the URL)
   --help       this help
@@ -95,9 +95,8 @@ SESSIONS
   );
   fs.mkdirSync(sockDir, { recursive: true });
 
-  // Port resolution: --port flag > $PORT env > default 8787.
-  // (Earlier this unconditionally wrote 8787, clobbering PORT=9000 — fixed.)
-  const port = opts.port || Number(process.env.PORT) || 8787;
+  // Port resolution: --port flag > $PORT env > default 9000.
+  const port = opts.port || Number(process.env.PORT) || 9000;
 
   const env = {
     ...process.env,
