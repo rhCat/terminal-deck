@@ -290,22 +290,42 @@ function sanitizeSnap(s) {
 }
 
 // Render a FULL terminal thumbnail: the entire captured content (visible screen
-// + scrollback) with the font shrunk to fit the card. No truncation — the card
-// reads like a zoomed-out screenshot of the whole terminal.
+// + scrollback) scaled down to fit the card — a true zoomed-out screenshot.
+//
+// Cross-browser note: Chrome enforces a minimum font size (user setting) and
+// would clamp tiny font-size values, overflowing the card, while Safari renders
+// them fine. So we render at the normal font and shrink with transform: scale()
+// instead — transforms are NOT affected by the min-font-size setting, and they
+// scale both axes so the miniature keeps the terminal's aspect ratio.
 function renderThumb(card, raw) {
-  const el = card.preview;
+  const outer = card.preview;
+  let inner = outer.__inner;
+  if (!inner) {
+    inner = document.createElement('div');
+    inner.style.whiteSpace = 'pre';
+    inner.style.transformOrigin = 'top left';
+    outer.appendChild(inner);
+    outer.__inner = inner;
+  }
   const clean = sanitizeSnap(raw).replace(/\s+$/, '');
-  el.textContent = clean;
-  // fit font size so ALL lines fit the card height — no truncation. The user
-  // explicitly accepts tiny fonts for a true full-screen thumbnail.
-  // account for the preview's 4px top+bottom padding: usable height = h - 8
-  const h = (el.clientHeight || 96) - 8;
+  inner.textContent = clean;
+
+  // usable card height = box minus the preview's 4px top+bottom padding
+  const h = (outer.clientHeight || 96) - 8;
   const lineCount = clean.split('\n').length;
   const BASE = 7; // px, the normal thumbnail font
-  const MIN = 1;  // px, hard readability floor
+  const MIN = 1;  // px equivalent, hard readability floor
   const lineH = 1.25; // CSS line-height on .card-preview
   const fit = Math.floor((h / (lineCount * lineH)) * 10) / 10;
-  el.style.fontSize = Math.max(MIN, Math.min(BASE, fit)) + 'px';
+  const fs = Math.max(MIN, Math.min(BASE, fit));
+
+  if (fs < BASE) {
+    inner.style.fontSize = BASE + 'px';
+    inner.style.transform = 'scale(' + (fs / BASE) + ')';
+  } else {
+    inner.style.fontSize = fs + 'px';
+    inner.style.transform = 'none';
+  }
 }
 
 async function pollSnapshot(name) {
