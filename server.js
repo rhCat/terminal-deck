@@ -74,6 +74,11 @@ function ensureServer() {
   try { spawn(TMUX_BIN, ['-L', 'deck', 'start-server'], { env: tmuxEnv(), stdio: 'ignore' }); } catch (e) {
     console.error('tmux start-server failed:', e.message);
   }
+  // The deck renders the pane itself; tmux's own status bar ([session:win*])
+  // would show as a stray line under the terminal. Disable it on the server.
+  try { spawn(TMUX_BIN, ['-L', 'deck', 'set', '-g', 'status', 'off'], { env: tmuxEnv(), stdio: 'ignore' }); } catch (e) {
+    console.error('tmux set status off failed:', e.message);
+  }
 }
 ensureServer();
 
