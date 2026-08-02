@@ -113,9 +113,21 @@ function ensureTerm() {
   term.loadAddon(fit);
   term.open($termEl);
   term.onData((d) => sendInput(d));
-  requestAnimationFrame(() => fit.fit());
+  requestAnimationFrame(() => { fit.fit(); resizeMain(); });
 }
-window.addEventListener('resize', () => { if (fit) fit.fit(); });
+function resizeMain() {
+  // Keep the tmux pane in sync with the actual visible viewport so the prompt
+  // sits at the bottom of the screen and history flows down from the top.
+  if (!fit || !term) return;
+  try { fit.fit(); } catch {}
+  const cols = Math.max(20, term.cols || 80);
+  const rows = Math.max(5, term.rows || 24);
+  if (state.active && state.tokens[state.active]) {
+    send({ t: 'resize', token: state.tokens[state.active], cols, rows });
+  }
+  if (term) term.scrollToBottom();
+}
+window.addEventListener('resize', () => resizeMain());
 // theme select
 $themeSelect.value = state.theme;
 $themeSelect.addEventListener('change', () => {
@@ -228,11 +240,18 @@ function attachMain(name) {
   const token = 'main:' + name;
   state.tokens[name] = token;
   ensureTerm();
-  // a touch of delay for the xterm to be open
+  // a touch of delay for the xterm to be open + fitted to the real viewport
   setTimeout(() => {
-    send({ t: 'main', token, session: name, cols: term.cols, rows: term.rows });
+    // fit to the actual panel size first, then attach the pty at that size
+    try { fit.fit(); } catch {}
+    const cols = Math.max(20, term.cols || 80);
+    const rows = Math.max(5, term.rows || 24);
+    send({ t: 'main', token, session: name, cols, rows });
+    // follow with an explicit resize so tmux's pane matches the viewport
+    send({ t: 'resize', token, cols, rows });
     if (term) term.clear();
-  }, 60);
+    if (term) term.scrollToBottom();
+  }, 80);
 }
 
 function sendInput(data) {
