@@ -5,6 +5,6 @@ const server = createServer(app);
 attachTo(server);
 
 const PORT = process.env.PORT || 9000;
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`terminal-deck listening on http://0.0.0.0:${PORT}`);
+server.listen(PORT, '127.0.0.1', () => {
+  console.log(`terminal-deck listening on http://127.0.0.1:${PORT}`);
 });
