@@ -222,12 +222,16 @@ window.addEventListener('resize', () => resizeMain());
 //     flash a "reviewing" indicator
 //   * back at the bottom -> resume (server flushes the buffered output)
 let followState = { sentOff: false, flashTimer: 0 };
+let attachGen = 0; // attach sequence id; stale injects are dropped
 function setFollow(on) {
   const token = state.active ? state.tokens[state.active] : null;
   if (!token) return;
   if (!on && !followState.sentOff) { send({ t: 'follow', token, on: false }); followState.sentOff = true; }
   else if (on && followState.sentOff) { send({ t: 'follow', token, on: true }); followState.sentOff = false; }
 }
+// Force-hold/release the live stream during attach, independent of scroll-follow.
+function holdLive(token) { if (token) send({ t: 'follow', token, on: false }); }
+function releaseLive(token) { if (token) { send({ t: 'follow', token, on: true }); followState.sentOff = false; } }
 function handleTermScroll(ydisp) {
   if (!term) return;
   const atBottom = ydisp >= term.buffer.active.baseY;
@@ -325,12 +329,13 @@ function connect() {
       const card = cardsEl.get(msg.session);
       if (card) renderThumb(card, msg.data);
     } else if (msg.t === 'hist') {
-      // Full capture (scrollback + live screen) for the active session, sent once
-      // the tall resize has settled. Grow xterm to tall, CLEAR, then write the
-      // whole capture — idempotent, so it re-establishes the correct buffer no
-      // matter what partial redraws landed during attach.
+      // Full capture (scrollback + live screen) for the active session. The live
+      // stream is HELD during attach (holdLive), so this is the only writer:
+      // grow xterm to tall, write the capture, then release the live stream —
+      // the flushed redraw overwrites just the screen tail, history stays.
       if (msg.session === state.active && term) {
         const data = String(msg.data || '');
+        const gen = attachGen;
         const histLines = data ? data.split('\n').length - 1 : 0;
         const screen = Math.max(5, Math.min(term.rows, 200));
         const tall = Math.max(term.rows, screen + Math.min(histLines, 20000));
@@ -338,10 +343,13 @@ function connect() {
         if (term.rows < tall) { try { term.resize(term.cols, tall); } catch {} }
         const token = state.tokens[state.active];
         if (token) send({ t: 'resize', token, cols: term.cols, rows: tall });
-        // write the capture (scrollback + live screen) into the tall buffer; the
-        // live screen tail re-renders over itself, and the scrollback stays.
-        if (data) { try { term.write(data); } catch {} }
-        term.scrollToBottom();
+        // write, then wait for xterm's async parse before releasing the live
+        // stream — otherwise the flush can interleave with the capture write.
+        term.write(data, () => {
+          if (gen !== attachGen) return; // a newer attach superseded this one
+          term.scrollToBottom();
+          releaseLive(token);
+        });
       }
     }
   };
@@ -540,18 +548,19 @@ function attachMain(name) {
     try { fit.fit(); } catch {}
     const cols = Math.max(20, term.cols || 80);
     const rows = Math.max(5, term.rows || 24);
+    const gen = ++attachGen;
     // If we already know this session's tall size (screen+scrollback), grow xterm
     // to it BEFORE the attach redraws — otherwise fit() leaves xterm short and
     // the live 26-line redraws clobber the injected history.
     if (state.tall && term.rows < state.tall) { try { term.resize(cols, state.tall); } catch {} }
-    // Grow the session WINDOW tall FIRST so the live redraw spans screen+scrollback
-    // from the start; then attach; then inject the full capture once xterm is at
-    // the tall size (see the hist handler). Writing history before the tall
-    // resize would park it in the short buffer's scrollback, which gets wiped.
+    // Grow the session WINDOW tall, attach, then HOLD the live stream so the
+    // history injection (below) is the only writer — the injection releases the
+    // hold once the capture is fully parsed, so live output can't race it.
     send({ t: 'presize', session: name, cols, rows });
     send({ t: 'main', token, session: name, cols, rows: state.tall || rows });
     send({ t: 'resize', token, cols, rows: state.tall || rows });
-    setTimeout(() => send({ t: 'history', session: name }), 500);
+    holdLive(token);
+    setTimeout(() => { if (gen === attachGen) send({ t: 'history', session: name }); }, 250);
   };
   // First attach: wait a beat for xterm to be open + fitted. Re-activation:
   // the term is already fitted, so attach immediately for snappy switching.
