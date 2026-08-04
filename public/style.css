@@ -192,6 +192,9 @@ button.active { border-color: var(--accent); color: var(--accent); }
   border: 1px solid var(--border); border-radius: var(--radius); padding: 6px;
   overflow: hidden;
 }
+/* xterm's own scrollbar IS the history review control now (tmux scrollback is
+   injected into xterm's buffer on attach) — it follows the theme like the rest. */
+#stage-meta.reviewing { color: var(--accent); font-weight: 600; }
 #stage-empty {
   flex: 1; display: flex; align-items: center; justify-content: center;
   color: var(--muted); border: 1px dashed var(--border); border-radius: var(--radius);

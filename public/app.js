@@ -13,6 +13,7 @@ const state = {
   tokens: {},        // session -> main terminal token
   theme: localStorage.getItem('deck-theme') || 'dark',
   clipboard: localStorage.getItem('deck-clipboard') || '',  // shared across all terminals/panes
+  tall: 0,           // xterm rows incl. scrollback region (screen + session history)
 };
 try { state.clipboard = localStorage.getItem('deck-clipboard') || ''; } catch { state.clipboard = ''; }
 
@@ -128,12 +129,32 @@ function ensureTerm() {
     fontSize: 13,
     allowProposedApi: true, // enables parser.registerOscHandler for OSC 52 clipboard
     theme: THEMES[state.theme] || THEMES.dark,
-    scrollback: 4000,
+    scrollback: 20000, // covers tmux's 20000-line history-limit for review
+    scrollOnUserInput: false, // typing doesn't yank the view to the bottom
   });
   fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.open($termEl);
-  term.onData((d) => sendInput(d));
+  // After a history injection grows xterm to (screen+scrollback), keep that
+  // taller height sticky across future fit() calls until the next session.
+  const _origFit = fit.fit.bind(fit);
+  fit.fit = () => {
+    _origFit();
+    if (state.tall && term.rows < state.tall) { try { term.resize(term.cols, state.tall); } catch {} }
+  };
+  // Native scrollback: xterm's own wheel/scrollbar/selection (incl. drag-to-edge
+  // auto-scroll) work because we inject tmux's history into xterm's buffer on
+  // attach. This wires: follow-pause while scrolled up, and the "reviewing"
+  // indicator. (See the "scrollback & follow" section below.)
+  term.onScroll((ydisp) => handleTermScroll(ydisp));
+  term.element.addEventListener('wheel', onTermWheelEdge, { passive: true });
+  term.onData((d) => {
+    if (term.buffer.active.viewportY < term.buffer.active.baseY) {
+      // any input while scrolled up snaps back to live
+      setTimeout(() => term.scrollToBottom(), 0);
+    }
+    sendInput(d);
+  });
   // OSC 52: when a pane writes to the clipboard (e.g. tmux copy-mode, vim yank),
   // capture it into the deck's SHARED clipboard so it's available across panes.
   try {
@@ -181,12 +202,57 @@ function resizeMain() {
   try { fit.fit(); } catch {}
   const cols = Math.max(20, term.cols || 80);
   const rows = Math.max(5, term.rows || 24);
+  const tall = state.tall || rows;
   if (state.active && state.tokens[state.active]) {
-    send({ t: 'resize', token: state.tokens[state.active], cols, rows });
+    // report the TALL size (screen+scrollback) so the pty/pane redraw spans the
+    // whole xterm buffer; the window itself is grown via presize
+    send({ t: 'resize', token: state.tokens[state.active], cols, rows: tall });
+    send({ t: 'presize', session: state.active, cols, rows });
   }
   if (term) term.scrollToBottom();
 }
 window.addEventListener('resize', () => resizeMain());
+
+// ---------- scrollback & follow (native xterm review) ----------
+// tmux's history is injected into xterm's OWN buffer on attach (see attachMain),
+// so the browser scrollbar / wheel / text selection all behave like a normal
+// terminal — including select-and-drag-to-edge auto-scroll, which needs the
+// scrollback to live in xterm (copy-mode scrolling would break the anchor).
+//   * scrolled up -> tell the server to pause the live stream (it buffers), and
+//     flash a "reviewing" indicator
+//   * back at the bottom -> resume (server flushes the buffered output)
+let followState = { sentOff: false, flashTimer: 0 };
+function setFollow(on) {
+  const token = state.active ? state.tokens[state.active] : null;
+  if (!token) return;
+  if (!on && !followState.sentOff) { send({ t: 'follow', token, on: false }); followState.sentOff = true; }
+  else if (on && followState.sentOff) { send({ t: 'follow', token, on: true }); followState.sentOff = false; }
+}
+function handleTermScroll(ydisp) {
+  if (!term) return;
+  const atBottom = ydisp >= term.buffer.active.baseY;
+  if (!atBottom) { setFollow(false); flashReviewing(); }
+  else setFollow(true);
+}
+function flashReviewing() {
+  const m = $stageMeta;
+  if (m.dataset.flash !== '1') {
+    m.dataset.flash = '1';
+    m.dataset.prev = m.textContent;
+    m.textContent = (m.dataset.prev || '') + ' · reviewing history';
+    m.classList.add('reviewing');
+  }
+  clearTimeout(followState.flashTimer);
+  followState.flashTimer = setTimeout(() => {
+    m.dataset.flash = ''; m.classList.remove('reviewing');
+    m.textContent = m.dataset.prev || (state.active ? 'tmux · live' : '');
+  }, 1500);
+}
+// Wheeling up at the very bottom boundary is the clearest "review" intent — the
+// viewport may not have moved yet, so nudge follow-pause on that gesture too.
+function onTermWheelEdge(e) {
+  if (e.deltaY < 0 && term && term.buffer.active.viewportY <= 1) { setFollow(false); flashReviewing(); }
+}
 // theme select
 $themeSelect.value = state.theme;
 $themeSelect.addEventListener('change', () => {
@@ -258,6 +324,25 @@ function connect() {
     } else if (msg.t === 'snap') {
       const card = cardsEl.get(msg.session);
       if (card) renderThumb(card, msg.data);
+    } else if (msg.t === 'hist') {
+      // Full capture (scrollback + live screen) for the active session, sent once
+      // the tall resize has settled. Grow xterm to tall, CLEAR, then write the
+      // whole capture — idempotent, so it re-establishes the correct buffer no
+      // matter what partial redraws landed during attach.
+      if (msg.session === state.active && term) {
+        const data = String(msg.data || '');
+        const histLines = data ? data.split('\n').length - 1 : 0;
+        const screen = Math.max(5, Math.min(term.rows, 200));
+        const tall = Math.max(term.rows, screen + Math.min(histLines, 20000));
+        state.tall = tall;
+        if (term.rows < tall) { try { term.resize(term.cols, tall); } catch {} }
+        const token = state.tokens[state.active];
+        if (token) send({ t: 'resize', token, cols: term.cols, rows: tall });
+        // write the capture (scrollback + live screen) into the tall buffer; the
+        // live screen tail re-renders over itself, and the scrollback stays.
+        if (data) { try { term.write(data); } catch {} }
+        term.scrollToBottom();
+      }
     }
   };
 }
@@ -420,6 +505,10 @@ async function pollSnapshot(name) {
 // ---------- active / main ----------
 function setActive(name) {
   state.active = name;
+  followState.sentOff = false;
+  // NOTE: keep state.tall from the previous attach of this session (if any) so
+  // the re-attach can grow xterm tall before the redraws; it's refreshed when
+  // the session's hist arrives. Reset only happens on first-ever attach (0).
   $stageEmpty.classList.toggle('hidden', !!name);
   $termEl.classList.toggle('hidden', !name);
   updateCards();
@@ -451,11 +540,18 @@ function attachMain(name) {
     try { fit.fit(); } catch {}
     const cols = Math.max(20, term.cols || 80);
     const rows = Math.max(5, term.rows || 24);
-    send({ t: 'main', token, session: name, cols, rows });
-    // follow with an explicit resize so tmux's pane matches the viewport
-    send({ t: 'resize', token, cols, rows });
-    if (term) term.clear();
-    if (term) term.scrollToBottom();
+    // If we already know this session's tall size (screen+scrollback), grow xterm
+    // to it BEFORE the attach redraws — otherwise fit() leaves xterm short and
+    // the live 26-line redraws clobber the injected history.
+    if (state.tall && term.rows < state.tall) { try { term.resize(cols, state.tall); } catch {} }
+    // Grow the session WINDOW tall FIRST so the live redraw spans screen+scrollback
+    // from the start; then attach; then inject the full capture once xterm is at
+    // the tall size (see the hist handler). Writing history before the tall
+    // resize would park it in the short buffer's scrollback, which gets wiped.
+    send({ t: 'presize', session: name, cols, rows });
+    send({ t: 'main', token, session: name, cols, rows: state.tall || rows });
+    send({ t: 'resize', token, cols, rows: state.tall || rows });
+    setTimeout(() => send({ t: 'history', session: name }), 500);
   };
   // First attach: wait a beat for xterm to be open + fitted. Re-activation:
   // the term is already fitted, so attach immediately for snappy switching.

@@ -79,6 +79,20 @@ function ensureServer() {
   try { spawn(TMUX_BIN, ['-L', 'deck', 'set', '-g', 'status', 'off'], { env: tmuxEnv(), stdio: 'ignore' }); } catch (e) {
     console.error('tmux set status off failed:', e.message);
   }
+  // Deep history for NEW sessions (review happens in xterm, which is fed the
+  // full scrollback on attach — see the 'history' ws handler below).
+  try { spawn(TMUX_BIN, ['-L', 'deck', 'set', '-g', 'history-limit', '20000'], { env: tmuxEnv(), stdio: 'ignore' }); } catch (e) {
+    console.error('tmux set history-limit failed:', e.message);
+  }
+  // 'manual' lets the deck grow a window past the smallest attached client, so a
+  // focused session can hold its screen + scrollback in one pane (xterm shows it
+  // as native scrollback). Off-detach the window shrinks back to the viewer.
+  try { spawn(TMUX_BIN, ['-L', 'deck', 'set', '-g', 'window-size', 'manual'], { env: tmuxEnv(), stdio: 'ignore' }); } catch (e) {
+    console.error('tmux set window-size manual failed:', e.message);
+  }
+  try { spawn(TMUX_BIN, ['-L', 'deck', 'set', '-g', 'aggressive-resize', 'off'], { env: tmuxEnv(), stdio: 'ignore' }); } catch (e) {
+    console.error('tmux set aggressive-resize off failed:', e.message);
+  }
 }
 ensureServer();
 
@@ -170,6 +184,17 @@ app.post('/api/kill', async (req, res) => {
 // ---- WebSocket ----------------------------------------------------------------
 const wss = new WebSocketServer({ noServer: true });
 
+// Scroll commands must run STRICTLY in order: enter-copy-mode before scroll-up,
+// or tmux rejects the scroll (send-keys -X requires copy mode). The ws message
+// handler is async, so two scroll messages can race their tmux processes — chain
+// them through a queue so copy-mode always lands first.
+let scrollQueue = Promise.resolve();
+function queuedTmux(args) {
+  const p = scrollQueue.then(() => tmux(args));
+  scrollQueue = p.catch(() => {}); // keep the chain alive on failure
+  return p;
+}
+
 // token -> {pty}  main interactive terminals
 const mains = new Map();
 
@@ -256,6 +281,13 @@ function openMain(ws, token, session, cols, rows) {
     // A replaced pty may emit a few trailing frames while it dies; never
     // forward them (they'd double-render on the same token).
     if (p._suppressData) return;
+    const m = mains.get(token);
+    // Scrolled-up review pauses the live stream: buffer it (trimmed) and flush
+    // when the user returns to the bottom, so their view doesn't chase output.
+    if (m && m.follow === false) {
+      m.buf = ((m.buf || '') + data).slice(-524288); // cap 512KB
+      return;
+    }
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'data', token, data }));
   });
   p.onExit(({ exitCode, signal }) => {
@@ -277,6 +309,8 @@ wss.on('connection', (ws) => {
     let msg; try { msg = JSON.parse(raw); } catch { return; }
     if (msg.t === 'main') {
       openMain(ws, msg.token, msg.session, msg.cols, msg.rows);
+      // default to following (live) for the fresh attach
+      const m = mains.get(msg.token); if (m) { m.follow = true; m.buf = ''; }
     } else if (msg.t === 'input') {
       const m = mains.get(msg.token);
       if (m) m.pty.write(msg.data);
@@ -290,6 +324,37 @@ wss.on('connection', (ws) => {
       // live thumbnail refresh
       const snap = await snapshot(msg.session);
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'snap', session: msg.session, data: snap }));
+    } else if (msg.t === 'presize') {
+      // Grow the session's WINDOW to (screen + min(history, history-limit)) tall,
+      // so the pane holds screen+scrollback in one region and tmux's live redraw
+      // scrolls as a unit (otherwise it double-renders and clobbers xterm's
+      // injected history). window-size 'manual' keeps it from snapping back to
+      // the smallest attached client. Height capped by history-limit.
+      const s = String(msg.session || '').replace(/[^A-Za-z0-9._-]/g, '_');
+      const cols = Math.max(20, Math.floor(msg.cols) || 80);
+      const rows = Math.max(5, Math.floor(msg.rows) || 24);
+      if (!s) return;
+      const limit = parseInt(await tmux(['show-options', '-g', '-v', 'history-limit']).catch(() => '2000'), 10) || 2000;
+      const hist = parseInt(await tmux(['display-message', '-t', s, '-p', '#{history_size}']).catch(() => '0'), 10) || 0;
+      const tall = rows + Math.min(hist, limit);
+      await tmux(['resize-window', '-t', s, '-x', String(cols), '-y', String(tall)]).catch(() => {});
+    } else if (msg.t === 'history') {
+      // Full tmux scrollback (colors + joined lines), to seed xterm's own buffer
+      // on attach so the browser-side scrollbar / selection work natively.
+      const s = String(msg.session || '').replace(/[^A-Za-z0-9._-]/g, '_');
+      if (!s) return;
+      const out = await tmux(['capture-pane', '-t', s, '-p', '-e', '-J', '-S', '-', '-E', '-1']).catch(() => '');
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'hist', session: s, data: out }));
+    } else if (msg.t === 'follow') {
+      // xterm is scrolled up reviewing history — pause/resume the live stream so
+      // the user's view stays put (buffered server-side; flushed on resume).
+      const m = mains.get(msg.token);
+      if (!m) return;
+      m.follow = msg.on !== false;
+      if (m.follow && m.buf) {
+        const d = m.buf; m.buf = '';
+        if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'data', token: msg.token, data: d }));
+      }
     }
   });
   ws.on('close', () => {
