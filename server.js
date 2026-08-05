@@ -122,7 +122,13 @@ async function snapshot(session, cols = 80, rows = 24) {
 // ---- HTTP --------------------------------------------------------------------
 const app = express();
 app.use(express.json()); // parse JSON request bodies (POST /api/rename, /api/session.name, etc.)
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+  // Never cache the app: the WS protocol changed between versions, and a cached
+  // old app.js against a new server leaves the terminal frozen (the pty buffers
+  // from birth until the matching client releases it). Versioned ?v= tags in
+  // index.html + no-store headers guarantee client and server always agree.
+  setHeaders: (res) => res.setHeader('Cache-Control', 'no-store'),
+}));
 
 app.get('/api/sessions', async (_req, res) => {
   try { res.json({ ok: true, sessions: await listSessions() }); }
@@ -309,6 +315,21 @@ wss.on('connection', (ws) => {
       // NOTE: the new pty starts with follow=false (buffering) so the attach
       // redraw can't race the history injection; the client releases the hold
       // once the scrollback capture has been written into xterm.
+      // SAFETY: if this client never requests 'history' (stale/cached app.js),
+      // release the hold after a beat so the terminal is never left frozen.
+      const m = mains.get(msg.token);
+      if (m) {
+        clearTimeout(m.releaseTimer);
+        m.releaseTimer = setTimeout(() => {
+          if (mains.get(msg.token) === m && m.follow === false) {
+            m.follow = true;
+            if (m.buf && ws.readyState === ws.OPEN) {
+              const d = m.buf; m.buf = '';
+              ws.send(JSON.stringify({ t: 'data', token: msg.token, data: d }));
+            }
+          }
+        }, 3000);
+      }
     } else if (msg.t === 'input') {
       const m = mains.get(msg.token);
       if (m) m.pty.write(msg.data);
@@ -332,7 +353,7 @@ wss.on('connection', (ws) => {
       if (!s) return;
       const out = await tmux(['capture-pane', '-t', s, '-p', '-e', '-J', '-S', '-']).catch(() => '');
       const m = mains.get('main:' + s);
-      if (m) m.buf = '';
+      if (m) { m.buf = ''; clearTimeout(m.releaseTimer); }
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'hist', session: s, data: out }));
     } else if (msg.t === 'follow') {
       // xterm is scrolled up reviewing history — pause/resume the live stream so
@@ -341,6 +362,7 @@ wss.on('connection', (ws) => {
       if (!m) return;
       m.follow = msg.on !== false;
       if (m.follow && m.buf) {
+        clearTimeout(m.releaseTimer);
         const d = m.buf; m.buf = '';
         if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'data', token: msg.token, data: d }));
       }
