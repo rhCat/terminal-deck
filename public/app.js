@@ -44,6 +44,7 @@ const $btnZoom = document.getElementById('btn-zoom');
 const $btnNew = document.getElementById('btn-new');
 const $btnClose = document.getElementById('btn-close');
 const $btnProps = document.getElementById('btn-props');
+const $btnClear = document.getElementById('btn-clear');
 const $btnDemo = document.getElementById('btn-demo');
 const $btnRename = document.getElementById('btn-rename');
 const $themeSelect = document.getElementById('theme-select');
@@ -685,6 +686,19 @@ async function doRename() {
   await refreshSessions(); // rebuilds cards w/ new name
   setActive(newName);
 }
+
+// ---------- clear history ----------
+// Wipe the focused session: tmux pane history (so it stays gone across
+// re-attaches), the deck's injected xterm scrollback, and a C-l to redraw the
+// visible frame — shells redraw the prompt, TUIs/REPLs treat C-l as redraw,
+// nothing ever executes it as a command.
+$btnClear.addEventListener('click', () => {
+  if (!state.active || !term) return;
+  send({ t: 'clearhist', session: state.active });
+  try { term.clear(); } catch {}
+  term.scrollToBottom();
+  sendInput('\x0c');
+});
 
 // ---------- kill ----------
 $btnClose.addEventListener('click', async () => {
