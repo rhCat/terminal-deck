@@ -201,6 +201,16 @@ function resizeMain() {
 }
 window.addEventListener('resize', () => resizeMain());
 
+// ---------- screen-clear detection (clear wipes scrollback too) ----------
+// tmux consumes the pane's erase sequences and redraws its client with
+// ED0-then-home (`\x1b[J\x1b[H`) — that signature IS a screen clear. Bare
+// ED2/ED3 must NOT match: TUI inits (vim/less/htop) emit those in their
+// redraws (tmux passes them through), and tmux keeps xterm in the normal
+// buffer the whole time, so there is no alternate-screen to fall back on.
+function isScreenClear(data) {
+  return /(\x1b\[[0-9;?]*J\x1b\[H|\x1bc)/.test(data);
+}
+
 // ---------- scrollback & follow (native xterm review) ----------
 // tmux's history is injected into xterm's OWN buffer on attach (see attachMain),
 // so the browser scrollbar / wheel / text selection all behave like a normal
@@ -309,7 +319,22 @@ function connect() {
     let msg; try { msg = JSON.parse(ev.data); } catch { return; }
     const activeTok = state.active ? state.tokens[state.active] : null;
     if (msg.t === 'data' && activeTok && msg.token === activeTok) {
-      if (term) term.write(msg.data);
+      if (term) {
+        // `clear` / Ctrl-L / reset inside a pane: tmux swallows the erase and
+        // redraws as ED0+home (or the program emits ED2/ED3/RIS). When that
+        // lands in the NORMAL buffer (not a TUI's alternate screen), treat it as
+        // a screen clear and wipe the injected scrollback too — a fresh terminal.
+        // tmux's own history is cleared via clearhist so it stays gone.
+        if (isScreenClear(msg.data) && term.buffer.active.type === 'normal') {
+          term.write(msg.data, () => {
+            try { term.clear(); } catch {}
+            term.scrollToBottom();
+          });
+          send({ t: 'clearhist', session: state.active });
+        } else {
+          term.write(msg.data);
+        }
+      }
     } else if (msg.t === 'bye') {
       // session ended
       if (state.active && msg.token === state.tokens[state.active]) setActive(null);

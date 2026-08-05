@@ -343,6 +343,11 @@ wss.on('connection', (ws) => {
       // live thumbnail refresh
       const snap = await snapshot(msg.session);
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'snap', session: msg.session, data: snap }));
+    } else if (msg.t === 'clearhist') {
+      // a pane clear (clear / Ctrl-L / reset) was detected — drop tmux's pane
+      // history so the wiped scrollback doesn't come back on the next re-attach
+      const s = String(msg.session || '').replace(/[^A-Za-z0-9._-]/g, '_');
+      if (s) await tmux(['clear-history', '-t', s]).catch(() => {});
     } else if (msg.t === 'history') {
       // Full pane capture (scrollback + live screen, colors + joined lines) to
       // seed xterm's buffer on attach. This SUPERSEDES the attach redraw that
