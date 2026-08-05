@@ -312,6 +312,14 @@ wss.on('connection', (ws) => {
     let msg; try { msg = JSON.parse(raw); } catch { return; }
     if (msg.t === 'main') {
       openMain(ws, msg.token, msg.session, msg.cols, msg.rows);
+      // Force the tmux WINDOW to the deck's viewport: the pty client's screen
+      // is the window size, and if other clients (the user's own terminals)
+      // pinned it taller (window-size latest), the deck's 26-row xterm would
+      // receive a 40+-row screen — cursor moves off-screen and everything
+      // beyond one page renders distorted/repeated. resize-window makes the
+      // pane match the deck exactly; other clients follow the window.
+      const s = String(msg.session || '').replace(/[^A-Za-z0-9._-]/g, '_');
+      if (s) tmux(['resize-window', '-t', s, '-x', Math.floor(msg.cols) || 132, '-y', Math.floor(msg.rows) || 43]).catch(() => {});
       // NOTE: the new pty starts with follow=false (buffering) so the attach
       // redraw can't race the history injection; the client releases the hold
       // once the scrollback capture has been written into xterm.
@@ -336,6 +344,9 @@ wss.on('connection', (ws) => {
     } else if (msg.t === 'resize') {
       const m = mains.get(msg.token);
       if (m) m.pty.resize(Math.floor(msg.cols), Math.floor(msg.rows));
+      // keep the tmux window in lockstep with the deck's viewport (see 'main')
+      const s = String(msg.token || '').replace(/^main:/, '').replace(/[^A-Za-z0-9._-]/g, '_');
+      if (s) tmux(['resize-window', '-t', s, '-x', Math.floor(msg.cols) || 132, '-y', Math.floor(msg.rows) || 43]).catch(() => {});
     } else if (msg.t === 'unfollow') {
       const m = mains.get(msg.token);
       if (m) { try { m.pty.kill(); } catch {} mains.delete(msg.token); }
