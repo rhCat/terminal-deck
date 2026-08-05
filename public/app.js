@@ -167,6 +167,11 @@ function ensureTerm() {
     return true;
   });
   term.onData((d) => {
+    // never forward mouse-report sequences into the pane — apps in the deck
+    // don't use them (tmux mouse is off), and a raw-echoing foreground prints
+    // them as ^[[<..M garbage (SGR) or ^[[M.. (X10)
+    d = d.replace(/\x1b\[<[0-9;]*[Mm]/g, '').replace(/\x1b\[M[\x00-\xff]{0,3}/g, '');
+    if (!d) return;
     if (term.buffer.active.viewportY < term.buffer.active.baseY) {
       // any input while scrolled up snaps back to live
       setTimeout(() => term.scrollToBottom(), 0);
@@ -491,8 +496,19 @@ function loadCardOrder(names) {
 }
 
 function sanitizeSnap(s) {
-  // strip ANSI escapes for the thumbnail (plain text preview is fine)
-  return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
+  // strip ANSI escapes for the thumbnail (plain text preview is fine): CSI
+  // (incl. SGR mouse `<...M`), OSC, charset/keypad modes, RIS, AND caret-form
+  // escapes that were echoed into a pane as literal text (^[[A / ^[[B / ^[[<..)
+  // — plus any leftover control bytes, so previews never show garbage.
+  return String(s)
+    .replace(/\x1b\[[0-9;?<>]*[a-zA-Z]/g, '')          // CSI incl. SGR mouse
+    .replace(/\x1b\][^\x07]*\x07/g, '')                 // OSC ... BEL
+    .replace(/\x1b[()][0-9A-B]/g, '')                   // charset selection
+    .replace(/\x1b[=>]/g, '')                           // keypad modes
+    .replace(/\x1bc/g, '')                              // RIS
+    .replace(/\^\[\[[0-9;?<>]*[a-zA-Z]/g, '')           // caret-form CSI garbage
+    .replace(/\^\[[()=]?[0-9A-B]?/g, '')                // caret-form single-byte esc
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');  // other control bytes
 }
 
 // Render a FULL terminal thumbnail: the entire captured content (visible screen
