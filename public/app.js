@@ -139,7 +139,33 @@ function ensureTerm() {
   // attach. This wires: follow-pause while scrolled up, and the "reviewing"
   // indicator. (See the "scrollback & follow" section below.)
   term.onScroll((ydisp) => handleTermScroll(ydisp));
-  term.element.addEventListener('wheel', onTermWheelEdge, { passive: true });
+  // Wheel: xterm's native viewport scroll is kept, but its arrow-key fallback is
+  // BLOCKED. When the wheel can't scroll (at the bottom scrolling down, or top
+  // scrolling up), xterm sends \x1b[A/\x1b[B into the pty — any process that
+  // echoes raw stdin (cat, gateways) prints them as literal ^[[A/^[[B garbage.
+  // Capture phase so we run before xterm's own wheel handler.
+  term.element.addEventListener('wheel', (e) => {
+    if (!term || term.buffer.active.type !== 'normal') return;
+    const b = term.buffer.active;
+    const atBottom = b.viewportY >= b.baseY;
+    const atTop = b.viewportY <= 0;
+    const blocked =
+      Math.abs(e.deltaX) > 0 ||                       // no h-scroll -> xterm would send left/right arrows
+      (e.deltaY > 0 && atBottom) ||                   // wheel-down at bottom -> would send Down
+      (e.deltaY < 0 && atTop);                        // wheel-up at top -> would send Up
+    if (blocked) { e.preventDefault(); e.stopPropagation(); }
+  }, { capture: true, passive: false });
+  // PgUp/PgDn scroll the deck's native scrollback; never forward them to tmux
+  // (its root PPage binding would drop the pane into copy-mode).
+  term.attachCustomKeyEventHandler((e) => {
+    if (e.type !== 'keydown') return true;
+    if (e.key === 'PageUp' || e.key === 'PageDown') {
+      e.preventDefault();
+      if (term) term.scrollPages(e.key === 'PageUp' ? -1 : 1);
+      return false;
+    }
+    return true;
+  });
   term.onData((d) => {
     if (term.buffer.active.viewportY < term.buffer.active.baseY) {
       // any input while scrolled up snaps back to live
@@ -249,11 +275,6 @@ function flashReviewing() {
     m.dataset.flash = ''; m.classList.remove('reviewing');
     m.textContent = m.dataset.prev || (state.active ? 'tmux · live' : '');
   }, 1500);
-}
-// Wheeling up at the very bottom boundary is the clearest "review" intent — the
-// viewport may not have moved yet, so nudge follow-pause on that gesture too.
-function onTermWheelEdge(e) {
-  if (e.deltaY < 0 && term && term.buffer.active.viewportY <= 1) { setFollow(false); flashReviewing(); }
 }
 // theme select
 $themeSelect.value = state.theme;
