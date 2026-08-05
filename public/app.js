@@ -236,6 +236,9 @@ function resizeMain() {
     send({ t: 'resize', token: state.tokens[state.active], cols, rows });
   }
   if (term) term.scrollToBottom();
+  // After a resize the canvas backing store can go stale (glyphs render as
+  // tiny dot-clusters on some GPUs/compositors). Force a full repaint.
+  requestAnimationFrame(() => { if (term) { try { term.refresh(0, term.rows - 1); } catch {} } });
 }
 window.addEventListener('resize', () => resizeMain());
 
