@@ -13,7 +13,6 @@ const state = {
   tokens: {},        // session -> main terminal token
   theme: localStorage.getItem('deck-theme') || 'dark',
   clipboard: localStorage.getItem('deck-clipboard') || '',  // shared across all terminals/panes
-  tall: 0,           // xterm rows incl. scrollback region (screen + session history)
 };
 try { state.clipboard = localStorage.getItem('deck-clipboard') || ''; } catch { state.clipboard = ''; }
 
@@ -135,13 +134,6 @@ function ensureTerm() {
   fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.open($termEl);
-  // After a history injection grows xterm to (screen+scrollback), keep that
-  // taller height sticky across future fit() calls until the next session.
-  const _origFit = fit.fit.bind(fit);
-  fit.fit = () => {
-    _origFit();
-    if (state.tall && term.rows < state.tall) { try { term.resize(term.cols, state.tall); } catch {} }
-  };
   // Native scrollback: xterm's own wheel/scrollbar/selection (incl. drag-to-edge
   // auto-scroll) work because we inject tmux's history into xterm's buffer on
   // attach. This wires: follow-pause while scrolled up, and the "reviewing"
@@ -202,12 +194,8 @@ function resizeMain() {
   try { fit.fit(); } catch {}
   const cols = Math.max(20, term.cols || 80);
   const rows = Math.max(5, term.rows || 24);
-  const tall = state.tall || rows;
   if (state.active && state.tokens[state.active]) {
-    // report the TALL size (screen+scrollback) so the pty/pane redraw spans the
-    // whole xterm buffer; the window itself is grown via presize
-    send({ t: 'resize', token: state.tokens[state.active], cols, rows: tall });
-    send({ t: 'presize', session: state.active, cols, rows });
+    send({ t: 'resize', token: state.tokens[state.active], cols, rows });
   }
   if (term) term.scrollToBottom();
 }
@@ -329,27 +317,28 @@ function connect() {
       const card = cardsEl.get(msg.session);
       if (card) renderThumb(card, msg.data);
     } else if (msg.t === 'hist') {
-      // Full capture (scrollback + live screen) for the active session. The live
-      // stream is HELD during attach (holdLive), so this is the only writer:
-      // grow xterm to tall, write the capture, then release the live stream —
-      // the flushed redraw overwrites just the screen tail, history stays.
+      // tmux scrollback (colors + joined lines) for the active session, written
+      // into xterm at STAGE size: the capture's last `rows` lines re-render the
+      // live screen, everything above becomes native scrollback. The live stream
+      // is held during attach (holdLive), so this is the only writer; releasing
+      // it (below) lets buffered live output overwrite just the screen tail.
       if (msg.session === state.active && term) {
         const data = String(msg.data || '');
         const gen = attachGen;
-        const histLines = data ? data.split('\n').length - 1 : 0;
-        const screen = Math.max(5, Math.min(term.rows, 200));
-        const tall = Math.max(term.rows, screen + Math.min(histLines, 20000));
-        state.tall = tall;
-        if (term.rows < tall) { try { term.resize(term.cols, tall); } catch {} }
         const token = state.tokens[state.active];
-        if (token) send({ t: 'resize', token, cols: term.cols, rows: tall });
-        // write, then wait for xterm's async parse before releasing the live
-        // stream — otherwise the flush can interleave with the capture write.
-        term.write(data, () => {
-          if (gen !== attachGen) return; // a newer attach superseded this one
-          term.scrollToBottom();
+        if (data) {
+          // clear-then-write the full capture (history + screen): the clear drops
+          // whatever attach frames leaked in; the capture's last `rows` lines
+          // become the live screen and everything above is native scrollback.
+          try { term.clear(); } catch {}
+          term.write(data, () => {
+            if (gen !== attachGen) return; // a newer attach superseded this one
+            term.scrollToBottom();
+            releaseLive(token);
+          });
+        } else {
           releaseLive(token);
-        });
+        }
       }
     }
   };
@@ -549,16 +538,11 @@ function attachMain(name) {
     const cols = Math.max(20, term.cols || 80);
     const rows = Math.max(5, term.rows || 24);
     const gen = ++attachGen;
-    // If we already know this session's tall size (screen+scrollback), grow xterm
-    // to it BEFORE the attach redraws — otherwise fit() leaves xterm short and
-    // the live 26-line redraws clobber the injected history.
-    if (state.tall && term.rows < state.tall) { try { term.resize(cols, state.tall); } catch {} }
-    // Grow the session WINDOW tall, attach, then HOLD the live stream so the
-    // history injection (below) is the only writer — the injection releases the
-    // hold once the capture is fully parsed, so live output can't race it.
-    send({ t: 'presize', session: name, cols, rows });
-    send({ t: 'main', token, session: name, cols, rows: state.tall || rows });
-    send({ t: 'resize', token, cols, rows: state.tall || rows });
+    send({ t: 'main', token, session: name, cols, rows });
+    send({ t: 'resize', token, cols, rows });
+    // HOLD the live stream while we inject history, so the injection is the only
+    // writer to the xterm buffer (the hold is released once the capture parses).
+    // Sent AFTER 'main' so the server's follow handler finds the pty.
     holdLive(token);
     setTimeout(() => { if (gen === attachGen) send({ t: 'history', session: name }); }, 250);
   };

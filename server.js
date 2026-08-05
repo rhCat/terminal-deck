@@ -84,14 +84,11 @@ function ensureServer() {
   try { spawn(TMUX_BIN, ['-L', 'deck', 'set', '-g', 'history-limit', '20000'], { env: tmuxEnv(), stdio: 'ignore' }); } catch (e) {
     console.error('tmux set history-limit failed:', e.message);
   }
-  // 'manual' lets the deck grow a window past the smallest attached client, so a
-  // focused session can hold its screen + scrollback in one pane (xterm shows it
-  // as native scrollback). Off-detach the window shrinks back to the viewer.
-  try { spawn(TMUX_BIN, ['-L', 'deck', 'set', '-g', 'window-size', 'manual'], { env: tmuxEnv(), stdio: 'ignore' }); } catch (e) {
-    console.error('tmux set window-size manual failed:', e.message);
-  }
-  try { spawn(TMUX_BIN, ['-L', 'deck', 'set', '-g', 'aggressive-resize', 'off'], { env: tmuxEnv(), stdio: 'ignore' }); } catch (e) {
-    console.error('tmux set aggressive-resize off failed:', e.message);
+  // Windows size to their largest client (the deck's own pty attach). Do NOT use
+  // window-size manual / tall windows: xterm must stay at stage size, with the
+  // injected history living in xterm's scrollback, not in a giant pane.
+  try { spawn(TMUX_BIN, ['-L', 'deck', 'set', '-g', 'window-size', 'latest'], { env: tmuxEnv(), stdio: 'ignore' }); } catch (e) {
+    console.error('tmux set window-size latest failed:', e.message);
   }
 }
 ensureServer();
@@ -299,7 +296,7 @@ function openMain(ws, token, session, cols, rows) {
     const cur = mains.get(token);
     if (cur && cur.pty === p) mains.delete(token);
   });
-  mains.set(token, { pty: p, session });
+  mains.set(token, { pty: p, session, follow: false, buf: '' });
   if (!socketTokens.has(ws)) socketTokens.set(ws, new Set());
   socketTokens.get(ws).add(token);
 }
@@ -309,8 +306,9 @@ wss.on('connection', (ws) => {
     let msg; try { msg = JSON.parse(raw); } catch { return; }
     if (msg.t === 'main') {
       openMain(ws, msg.token, msg.session, msg.cols, msg.rows);
-      // default to following (live) for the fresh attach
-      const m = mains.get(msg.token); if (m) { m.follow = true; m.buf = ''; }
+      // NOTE: the new pty starts with follow=false (buffering) so the attach
+      // redraw can't race the history injection; the client releases the hold
+      // once the scrollback capture has been written into xterm.
     } else if (msg.t === 'input') {
       const m = mains.get(msg.token);
       if (m) m.pty.write(msg.data);
@@ -324,26 +322,17 @@ wss.on('connection', (ws) => {
       // live thumbnail refresh
       const snap = await snapshot(msg.session);
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'snap', session: msg.session, data: snap }));
-    } else if (msg.t === 'presize') {
-      // Grow the session's WINDOW to (screen + min(history, history-limit)) tall,
-      // so the pane holds screen+scrollback in one region and tmux's live redraw
-      // scrolls as a unit (otherwise it double-renders and clobbers xterm's
-      // injected history). window-size 'manual' keeps it from snapping back to
-      // the smallest attached client. Height capped by history-limit.
-      const s = String(msg.session || '').replace(/[^A-Za-z0-9._-]/g, '_');
-      const cols = Math.max(20, Math.floor(msg.cols) || 80);
-      const rows = Math.max(5, Math.floor(msg.rows) || 24);
-      if (!s) return;
-      const limit = parseInt(await tmux(['show-options', '-g', '-v', 'history-limit']).catch(() => '2000'), 10) || 2000;
-      const hist = parseInt(await tmux(['display-message', '-t', s, '-p', '#{history_size}']).catch(() => '0'), 10) || 0;
-      const tall = rows + Math.min(hist, limit);
-      await tmux(['resize-window', '-t', s, '-x', String(cols), '-y', String(tall)]).catch(() => {});
     } else if (msg.t === 'history') {
-      // Full tmux scrollback (colors + joined lines), to seed xterm's own buffer
-      // on attach so the browser-side scrollbar / selection work natively.
+      // Full pane capture (scrollback + live screen, colors + joined lines) to
+      // seed xterm's buffer on attach. This SUPERSEDES the attach redraw that
+      // was buffered so far — drop it, so the post-release flush only carries
+      // output genuinely newer than the capture (the attach redraw starts with a
+      // clear-screen sequence that would otherwise wipe the injected history).
       const s = String(msg.session || '').replace(/[^A-Za-z0-9._-]/g, '_');
       if (!s) return;
-      const out = await tmux(['capture-pane', '-t', s, '-p', '-e', '-J', '-S', '-', '-E', '-1']).catch(() => '');
+      const out = await tmux(['capture-pane', '-t', s, '-p', '-e', '-J', '-S', '-']).catch(() => '');
+      const m = mains.get('main:' + s);
+      if (m) m.buf = '';
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'hist', session: s, data: out }));
     } else if (msg.t === 'follow') {
       // xterm is scrolled up reviewing history — pause/resume the live stream so
