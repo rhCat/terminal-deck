@@ -131,10 +131,16 @@ function ensureTerm() {
     theme: THEMES[state.theme] || THEMES.dark,
     scrollback: 20000, // covers tmux's 20000-line history-limit for review
     scrollOnUserInput: false, // typing doesn't yank the view to the bottom
+    bracketedPasteMode: true, // tmux requests \x1b[?2004h in the attach chunk we DISCARD
   });
   fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.open($termEl);
+  // Force bracketed paste ON. tmux enables it at client init (the \x1b[?2004h
+  // in the attach redraw that the server discards), so xterm's dec mode never
+  // gets set — pastes went out UNWRAPPED and vim's autoindent stair-stepped
+  // every pasted line. This restores the mode so native Cmd+V is bracketed.
+  term.write('\x1b[?2004h');
   // Native scrollback: xterm's own wheel/scrollbar/selection (incl. drag-to-edge
   // auto-scroll) work because we inject tmux's history into xterm's buffer on
   // attach. This wires: follow-pause while scrolled up, and the "reviewing"
