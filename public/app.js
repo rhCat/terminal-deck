@@ -354,8 +354,7 @@ function connect() {
         // tmux's own history is cleared via clearhist so it stays gone.
         if (isScreenClear(msg.data) && term.buffer.active.type === 'normal') {
           term.write(msg.data, () => {
-            try { term.clear(); } catch {}
-            term.scrollToBottom();
+            clearDeckBuffer();
           });
           send({ t: 'clearhist', session: state.active });
         } else {
@@ -687,6 +686,16 @@ async function doRename() {
   setActive(newName);
 }
 
+function clearDeckBuffer() {
+  try { term.clear(); } catch {}
+  try { term.scrollToBottom(); } catch {}
+  // Force a full canvas repaint on the next frame: after a buffer wipe some
+  // GPU compositors keep ghost pixels from the previous content at the bottom
+  // rows (renders as faint rows of dots on some machines). refresh() redraws
+  // every row from the now-empty buffer, scrubbing the ghosts.
+  requestAnimationFrame(() => { if (term) { try { term.refresh(0, term.rows - 1); } catch {} } });
+}
+
 // ---------- clear history ----------
 // Wipe the focused session: tmux pane history (so it stays gone across
 // re-attaches), the deck's injected xterm scrollback, and a C-l to redraw the
@@ -695,8 +704,7 @@ async function doRename() {
 $btnClear.addEventListener('click', () => {
   if (!state.active || !term) return;
   send({ t: 'clearhist', session: state.active });
-  try { term.clear(); } catch {}
-  term.scrollToBottom();
+  clearDeckBuffer();
   sendInput('\x0c');
 });
 
