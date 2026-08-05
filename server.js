@@ -391,6 +391,29 @@ wss.on('connection', (ws) => {
   });
 });
 
+// The deck is the ONLY access surface for these tmux sessions — so the tmux
+// window must ALWAYS equal the deck's viewport, not just at attach time.
+// Watchdog: every 2s, if any attached pane's window has drifted from the
+// deck's pty size (another client resized it, a stale window-size event),
+// force it back. Idempotent and cheap (1 tmux call per active session).
+setInterval(() => {
+  if (mains.size === 0) return;
+  for (const [token, m] of mains) {
+    if (!m || !m.pty || !m.pty.cols || !m.pty.rows) continue;
+    const s = String(token).replace(/^main:/, '');
+    tmux(['display-message', '-t', s, '-p', '#{window_width}x#{window_height}'])
+      .then((out) => {
+        const mm = /^(\d+)x(\d+)/.exec(String(out).trim());
+        if (!mm) return;
+        const w = Number(mm[1]), h = Number(mm[2]);
+        if ((w !== m.pty.cols || h !== m.pty.rows) && mains.get(token) === m) {
+          tmux(['resize-window', '-t', s, '-x', m.pty.cols, '-y', m.pty.rows]).catch(() => {});
+        }
+      })
+      .catch(() => {});
+  }
+}, 2000);
+
 export function attachTo(server) {
   server.on('upgrade', (req, socket, head) => {
     const u = new URL(req.url, 'http://localhost');
