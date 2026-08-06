@@ -201,6 +201,8 @@ function ensureTerm() {
 }
 
 // ---- shared clipboard ----
+// Replace the deck's shared clipboard value (shown in the 📋 popover) — the
+// single cross-session paste buffer for the deck.
 function setSharedClipboard(text) {
   state.clipboard = text;
   try { localStorage.setItem('deck-clipboard', text); } catch {}
@@ -209,6 +211,10 @@ function setSharedClipboard(text) {
   const count = document.getElementById('cb-len');
   if (count) count.textContent = text.length + ' chars';
 }
+// Paste the deck's shared clipboard into the focused session. Bracketed paste
+// is forced ON in the terminal (tmux's own 2004h request is discarded with the
+// attach redraw), so pastes are wrapped here; tmux re-wraps for 2004-enabled
+// panes — vim receives clean multi-line text instead of stair-stepped lines.
 function pasteToFocused(text) {
   if (!state.active || !state.tokens[state.active]) return;
   if (text == null) text = state.clipboard;
@@ -216,6 +222,8 @@ function pasteToFocused(text) {
   const t = String(text).replace(/\r?\n/g, '\r');
   send({ t: 'input', token: state.tokens[state.active], data: '\x1b[200~' + t + '\x1b[201~' });
 }
+// Copy the terminal selection into the deck's shared clipboard (browser-safe,
+// UTF-8) so it can be pasted into any session via pasteToFocused.
 function copySelectionToClipboard() {
   if (!term) return;
   const sel = term.getSelection();
@@ -269,6 +277,10 @@ function setFollow(on) {
   else if (on && followState.sentOff) { send({ t: 'follow', token, on: true }); followState.sentOff = false; }
 }
 // Force-hold/release the live stream during attach, independent of scroll-follow.
+// holdLive: buffer the pty stream server-side while the tmux history capture is
+// injected — the injection must be the ONLY writer or the attach redraw races it
+// and the scrollback never lands. releaseLive: resume the stream once the capture
+// is written; the buffered live output then overwrites just the screen tail.
 function holdLive(token) { if (token) send({ t: 'follow', token, on: false }); }
 function releaseLive(token) { if (token) { send({ t: 'follow', token, on: true }); followState.sentOff = false; } }
 function handleTermScroll(ydisp) {
@@ -407,6 +419,8 @@ function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj))
 
 const cardsEl = new Map(); // sessionName -> {el, preview, dot}
 
+// Refresh the WORKS sidebar from the server's session list: add cards for new
+// sessions, remove cards for killed ones, restore the saved card order.
 async function refreshSessions() {
   const r = await fetch(API + '/api/sessions'); const j = await r.json();
   if (!j.ok) return;
@@ -504,6 +518,9 @@ function loadCardOrder(names) {
   } catch { return names; }
 }
 
+// Sanitize captured pane text for thumbnails: strip caret-form CSI (^[[A/B/<…M)
+// and leftover control bytes so escape garbage can never render in the card
+// previews, even when a pane's history physically contains it.
 function sanitizeSnap(s) {
   // strip ANSI escapes for the thumbnail (plain text preview is fine): CSI
   // (incl. SGR mouse `<...M`), OSC, charset/keypad modes, RIS, AND caret-form
@@ -595,6 +612,11 @@ function setActive(name) {
   }
 }
 
+// Attach to a session from the deck: spawn the pty at the deck's viewport, hold
+// the live stream, request the tmux history, then release. The server injects
+// tmux's FULL scrollback (history + screen, colors preserved) as xterm's native
+// scrollback, so wheel/selection work over the whole session — not just the
+// visible screen. A newer attach supersedes an in-flight one (attachGen).
 function attachMain(name) {
   // ALWAYS re-attach on activation: a cached token does NOT mean the screen is
   // intact — the xterm buffer gets cleared on switch, and tmux only sends a
@@ -623,6 +645,10 @@ function attachMain(name) {
   else setTimeout(attach, 80);
 }
 
+// Send input to the focused session's pty — the final gate before bytes cross
+// the wire. Mouse-report sequences (SGR \x1b[<..M, X10 \x1b[M..) were already
+// filtered upstream in onData, so a wheel/click report can never reach a pane
+// as literal garbage (the boundary-wheel blocker is the first defense).
 function sendInput(data) {
   if (!state.active) return;
   send({ t: 'input', token: state.tokens[state.active], data });
@@ -695,6 +721,10 @@ async function doRename() {
   setActive(newName);
 }
 
+// Wipe the deck's view of the session: clear xterm's buffer (dropping the
+// injected scrollback), force a full canvas repaint next frame (kills the
+// stale-pixel dot-grid ghosts), and redraw the prompt. Used by the 🧹 Clear
+// button and whenever a real screen clear lands in the pane (see isScreenClear).
 function clearDeckBuffer() {
   try { term.clear(); } catch {}
   try { term.scrollToBottom(); } catch {}

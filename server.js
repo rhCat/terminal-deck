@@ -229,6 +229,11 @@ function diagnoseSpawn() {
   return '[diag] ' + lines.join(' | ');
 }
 
+// Spawn (or re-attach) the interactive pty for a session. The pty buffers from
+// birth (follow:false) so the attach redraw can never race the history
+// injection, and the tmux window is forced to the deck's viewport so the
+// pane's screen matches xterm's (no 43-row-pane-in-26-row distortion). The
+// 2s watchdog below keeps that window size locked for the life of the pty.
 function openMain(ws, token, session, cols, rows) {
   // Re-attach semantics: every activation re-spawns the attach pty so tmux
   // sends a FULL screen redraw (tmux only fully repaints a fresh client).
