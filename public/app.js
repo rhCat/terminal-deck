@@ -9,7 +9,6 @@ const PROPS_INTERVAL = 3000; // ms between properties refreshes
 const state = {
   sessions: [],      // [{name}]
   active: null,      // currently focused session name
-  notes: {},         // session -> notes text (local, could be persisted server-side)
   tokens: {},        // session -> main terminal token
   theme: localStorage.getItem('deck-theme') || 'dark',
   clipboard: localStorage.getItem('deck-clipboard') || '',  // shared across all terminals/panes
@@ -601,13 +600,11 @@ function setActive(name) {
     ensureTerm();
     $stageTitle.textContent = name;
     $stageMeta.textContent = 'tmux · live';
-    $notes.value = state.notes[name] || '';
     attachMain(name);
     refreshProps();
   } else {
     $stageTitle.textContent = '—';
     $stageMeta.textContent = '';
-    $notes.value = '';
     if (term) { term.dispose(); term = null; fit = null; }
   }
 }
@@ -654,13 +651,118 @@ function sendInput(data) {
   send({ t: 'input', token: state.tokens[state.active], data });
 }
 
-// ---------- notes (local persistence via localStorage) ----------
+// ---------- sticky notes (multi-tab, NOT bound to any work) ----------
+// Model: sticky[] = [{id, title, text, collapsed}]. Notes are free-floating:
+// switching works never touches them. ONE textarea in the DOM (the active
+// note) and tabs are rebuilt only on structural changes — typing only mutates
+// memory + a debounced localStorage write, so the heap stays flat.
+let sticky = [];
+let stickyActive = 0;
+let stickySaveTimer = 0;
+let notesH = 130;
+const $notesTabs = document.getElementById('notes-tabs');
+const $notesCollapse = document.getElementById('notes-collapse');
+const $notesAdd = document.getElementById('notes-add');
+const $notesDel = document.getElementById('notes-del');
+const $notesResize = document.getElementById('notes-resize');
+
+function saveStickySoon() {
+  clearTimeout(stickySaveTimer);
+  stickySaveTimer = setTimeout(() => {
+    try { localStorage.setItem('deck-sticky', JSON.stringify(sticky)); } catch {}
+  }, 400);
+}
+function applyNotesCollapsed() {
+  const c = !!(sticky[stickyActive] && sticky[stickyActive].collapsed);
+  document.body.classList.toggle('notes-collapsed', c);
+  document.documentElement.style.setProperty('--notes-h', (c ? 36 : notesH) + 'px');
+  $notesCollapse.textContent = c ? '▸' : '▾';
+}
+function renderStickyTabs() {
+  $notesTabs.textContent = '';
+  sticky.forEach((n, i) => {
+    const t = document.createElement('div');
+    t.className = 'notes-tab' + (i === stickyActive ? ' active' : '');
+    t.textContent = n.title || 'note';
+    t.title = 'open · double-click to rename';
+    t.addEventListener('click', () => selectSticky(i));
+    t.addEventListener('dblclick', () => renameSticky(i));
+    $notesTabs.appendChild(t);
+  });
+  applyNotesCollapsed();
+}
+function selectSticky(i) {
+  if (i < 0 || i >= sticky.length) return;
+  stickyActive = i;
+  $notes.value = sticky[i].text;
+  renderStickyTabs();
+}
+function addSticky() {
+  sticky.push({ id: Date.now().toString(36), title: 'note ' + (sticky.length + 1), text: '', collapsed: false });
+  selectSticky(sticky.length - 1);
+  $notes.focus();
+  saveStickySoon();
+}
+function deleteSticky(i) {
+  if (sticky.length <= 1) {
+    sticky[0] = { id: Date.now().toString(36), title: 'note 1', text: '', collapsed: false };
+    stickyActive = 0;
+  } else {
+    sticky.splice(i, 1);
+    if (stickyActive >= sticky.length) stickyActive = sticky.length - 1;
+  }
+  $notes.value = sticky[stickyActive] ? sticky[stickyActive].text : '';
+  renderStickyTabs();
+  saveStickySoon();
+}
+function renameSticky(i) {
+  const t = prompt('Note title:', sticky[i].title);
+  if (t == null) return;
+  sticky[i].title = t.trim() || sticky[i].title;
+  renderStickyTabs();
+  saveStickySoon();
+}
 $notes.addEventListener('input', () => {
-  if (!state.active) return;
-  state.notes[state.active] = $notes.value;
-  try { localStorage.setItem('deck-notes', JSON.stringify(state.notes)); } catch {}
+  if (stickyActive >= 0 && sticky[stickyActive]) { sticky[stickyActive].text = $notes.value; saveStickySoon(); }
 });
-try { state.notes = JSON.parse(localStorage.getItem('deck-notes') || '{}') || {}; } catch { state.notes = {}; }
+$notesAdd.addEventListener('click', addSticky);
+$notesDel.addEventListener('click', () => { if (stickyActive >= 0) deleteSticky(stickyActive); });
+$notesCollapse.addEventListener('click', () => {
+  if (stickyActive >= 0 && sticky[stickyActive]) {
+    sticky[stickyActive].collapsed = !sticky[stickyActive].collapsed;
+    applyNotesCollapsed();
+    saveStickySoon();
+  }
+});
+// resize: drag the notes panel's top edge (direct style writes, no loop)
+try { notesH = parseInt(localStorage.getItem('deck-notes-h') || '130', 10) || 130; } catch {}
+document.documentElement.style.setProperty('--notes-h', notesH + 'px');
+$notesResize.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  const move = (ev) => {
+    notesH = Math.min(Math.max(window.innerHeight - ev.clientY, 36), Math.round(window.innerHeight * 0.6));
+    document.documentElement.style.setProperty('--notes-h', notesH + 'px');
+  };
+  const up = () => {
+    document.removeEventListener('mousemove', move);
+    document.removeEventListener('mouseup', up);
+    try { localStorage.setItem('deck-notes-h', String(notesH)); } catch {}
+  };
+  document.addEventListener('mousemove', move);
+  document.addEventListener('mouseup', up);
+});
+// boot: load saved notes -> migrate legacy per-work notes -> default note
+try { const s = JSON.parse(localStorage.getItem('deck-sticky') || 'null'); if (Array.isArray(s)) sticky = s; } catch {}
+if (sticky.length === 0) {
+  try {
+    const old = JSON.parse(localStorage.getItem('deck-notes') || '{}') || {};
+    for (const [k, v] of Object.entries(old)) if (v && v.trim()) sticky.push({ id: Date.now().toString(36) + '-' + k, title: k, text: v, collapsed: false });
+  } catch {}
+}
+if (sticky.length === 0) sticky.push({ id: Date.now().toString(36), title: 'note 1', text: '', collapsed: false });
+if (stickyActive >= sticky.length) stickyActive = 0;
+$notes.value = sticky[stickyActive].text;
+renderStickyTabs();
 
 // ---------- toolbar actions ----------
 function updateCards() {
@@ -710,11 +812,9 @@ async function doRename() {
   });
   const j = await r.json();
   if (!j.ok) { alert('Rename failed: ' + (j.error || '')); return; }
-  // move token + notes to the new name
+  // move token to the new name (notes are sticky — they never follow a work)
   state.tokens[newName] = state.tokens[oldName];
   delete state.tokens[oldName];
-  state.notes[newName] = state.notes[oldName];
-  delete state.notes[oldName];
   state.active = newName;
   $stageTitle.textContent = newName;
   await refreshSessions(); // rebuilds cards w/ new name
