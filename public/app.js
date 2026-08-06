@@ -269,6 +269,7 @@ function isScreenClear(data) {
 //   * back at the bottom -> resume (server flushes the buffered output)
 let followState = { sentOff: false, flashTimer: 0 };
 let attachGen = 0; // attach sequence id; stale injects are dropped
+let attachT0 = 0;  // last attach start (switch-lag diagnostic)
 function setFollow(on) {
   const token = state.active ? state.tokens[state.active] : null;
   if (!token) return;
@@ -397,6 +398,7 @@ function connect() {
         const data = String(msg.data || '');
         const gen = attachGen;
         const token = state.tokens[state.active];
+        const arriveT = performance.now(); // switch-lag diagnostic
         if (data) {
           // clear-then-write the full capture (history + screen): the clear drops
           // whatever attach frames leaked in; the capture's last `rows` lines
@@ -406,6 +408,7 @@ function connect() {
             if (gen !== attachGen) return; // a newer attach superseded this one
             term.scrollToBottom();
             releaseLive(token);
+            console.log(`[attach] ${msg.session}: hist arrived +${(arriveT - attachT0).toFixed(0)}ms, rendered +${(performance.now() - attachT0).toFixed(0)}ms, payload ${(data.length / 1024).toFixed(0)}KB`);
           });
         } else {
           releaseLive(token);
@@ -621,6 +624,7 @@ function attachMain(name) {
   // server respawn the attach pty so the pane repaints completely.
   const token = 'main:' + name;
   state.tokens[name] = token;
+  attachT0 = performance.now(); // switch-lag diagnostic
   ensureTerm();
   const attach = () => {
     // fit to the actual panel size first, then attach the pty at that size
@@ -636,6 +640,7 @@ function attachMain(name) {
     // capturing, so there is no 250ms attach-timing gamble (snappy switching).
     holdLive(token);
     send({ t: 'history', session: name });
+    console.log(`[attach] ${name}: main sent at +${(performance.now() - attachT0).toFixed(0)}ms`);
   };
   // First attach: wait a beat for xterm to be open + fitted. Re-activation:
   // the term is already fitted, so attach immediately for snappy switching.
