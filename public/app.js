@@ -403,8 +403,12 @@ function connect() {
           // clear-then-write the full capture (history + screen): the clear drops
           // whatever attach frames leaked in; the capture's last `rows` lines
           // become the live screen and everything above is native scrollback.
+          // CRLF: capture-pane joins rows with LF-only, and xterm (correctly)
+          // treats LF as move-down WITHOUT resetting the column — rows would
+          // accumulate horizontal offsets (the "failed to reformat" artifact).
           try { term.clear(); } catch {}
-          term.write(data, () => {
+          const crlf = data.replace(/\n/g, '\r\n');
+          term.write(crlf, () => {
             if (gen !== attachGen) return; // a newer attach superseded this one
             term.scrollToBottom();
             releaseLive(token);

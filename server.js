@@ -378,6 +378,12 @@ wss.on('connection', (ws) => {
       // timing (this is what lets the client request history immediately).
       if (m && m.pty && m.pty.cols) {
         await tmux(['resize-window', '-t', s, '-x', m.pty.cols, '-y', m.pty.rows]).catch(() => {});
+        // Let tmux's resize redraw DRAIN into the pty buffer, then discard it
+        // with the supersede below. Otherwise it lands in the post-release
+        // flush and its absolute cursor positioning overwrites the injected
+        // scrollback (rows pushed to random column offsets = "failed to
+        // reformat"). ~300ms covers the tmux spawn + client render.
+        await new Promise((r) => setTimeout(r, 300));
       }
       const out = await tmux(['capture-pane', '-t', s, '-p', '-e', '-J', '-S', '-']).catch(() => '');
       if (m) { m.buf = ''; clearTimeout(m.releaseTimer); }
