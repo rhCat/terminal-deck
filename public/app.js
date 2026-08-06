@@ -627,14 +627,15 @@ function attachMain(name) {
     try { fit.fit(); } catch {}
     const cols = Math.max(20, term.cols || 80);
     const rows = Math.max(5, term.rows || 24);
-    const gen = ++attachGen;
     send({ t: 'main', token, session: name, cols, rows });
     send({ t: 'resize', token, cols, rows });
     // HOLD the live stream while we inject history, so the injection is the only
     // writer to the xterm buffer (the hold is released once the capture parses).
-    // Sent AFTER 'main' so the server's follow handler finds the pty.
+    // Sent AFTER 'main' so the server's follow handler finds the pty. History is
+    // requested immediately — the server re-asserts the window size before
+    // capturing, so there is no 250ms attach-timing gamble (snappy switching).
     holdLive(token);
-    setTimeout(() => { if (gen === attachGen) send({ t: 'history', session: name }); }, 250);
+    send({ t: 'history', session: name });
   };
   // First attach: wait a beat for xterm to be open + fitted. Re-activation:
   // the term is already fitted, so attach immediately for snappy switching.

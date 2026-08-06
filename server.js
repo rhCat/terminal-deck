@@ -372,8 +372,14 @@ wss.on('connection', (ws) => {
       // clear-screen sequence that would otherwise wipe the injected history).
       const s = String(msg.session || '').replace(/[^A-Za-z0-9._-]/g, '_');
       if (!s) return;
-      const out = await tmux(['capture-pane', '-t', s, '-p', '-e', '-J', '-S', '-']).catch(() => '');
       const m = mains.get('main:' + s);
+      // Force the tmux window to the deck's viewport FIRST so the capture's
+      // screen tail matches xterm's rows — no reliance on the client's attach
+      // timing (this is what lets the client request history immediately).
+      if (m && m.pty && m.pty.cols) {
+        await tmux(['resize-window', '-t', s, '-x', m.pty.cols, '-y', m.pty.rows]).catch(() => {});
+      }
+      const out = await tmux(['capture-pane', '-t', s, '-p', '-e', '-J', '-S', '-']).catch(() => '');
       if (m) { m.buf = ''; clearTimeout(m.releaseTimer); }
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'hist', session: s, data: out }));
     } else if (msg.t === 'follow') {
